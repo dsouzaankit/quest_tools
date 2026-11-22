@@ -1,0 +1,193 @@
+# quest_tools: Meta Quest headset helpers over adb
+
+Generic PowerShell 7 helpers for a Meta Quest (tested on Quest 3) on **wireless adb**, split out of [ios_3d_loop_segments](../iOS%20apps/ios_3d_loop_segments) (`windows\quest\`, commit e865041). Used by:
+
+- **Loop Segments** (`ios_3d_loop_segments\windows\quest\`): the PC companion's Open on Quest, Quest control page, quit cleanup (`Watch-LoopSegmentsQuestLanTab.ps1` loads this repo);
+- **3d_playlist_local** (`individual_transcode\quest\`): the workflow's Quest session (through Loop Segments' scripts, plus `Find-QuestAdbExe` / `Invoke-Adb` / `Get-QuestWakefulness` directly).
+
+Log: `%TEMP%\loopsegments-quest-lantab.log` (one log for all of them).
+
+## Layout
+
+| File | What |
+|------|------|
+| [`QuestTools.ps1`](QuestTools.ps1) | Loader: dot-source it, then `Initialize-QuestTools` (optional) and $script:Adb = Find-QuestAdbExe` |
+| [`Invoke-QuestHeadset.ps1`](Invoke-QuestHeadset.ps1) | Command line: `-Status` (default, read-only), `-ResetAdb`, `-EnableProximity` / `-DisableProximity` / `-ToggleProximity`, `-WifiOff`, `-KeepAwakeSession -ParentPid N [-RestoreProximity]` |
+| [`Set-QuestProximitySensor.ps1`](Set-QuestProximitySensor.ps1), [`Set-QuestWifiOff.ps1`](Set-QuestWifiOff.ps1) | Double-click tools: retry until the headset is on adb, show the result, wait for Enter |
+| [`QuestWrapperCommon.ps1`](QuestWrapperCommon.ps1) | Their shared retry loop and closing message |
+| [`lib\QuestLog.ps1`](lib/QuestLog.ps1) | `Write-QuestLog` |
+| [`lib\QuestAdbServer.ps1`](lib/QuestAdbServer.ps1) | `Reset-QuestAdbServer` (also a stuck server), `Start-QuestAdbServerDetached` |
+| [`lib\QuestAdb.ps1`](lib/QuestAdb.ps1) | `Find-QuestAdbExe`, `Invoke-Adb`, `Get-OnlineQuestSerial`, `Connect-Quest` (+ last address, mDNS, rediscover), `Repair-QuestAdbStuckServer`, `Get-QuestWakefulness`, `Test-QuestHeadsetWorn` |
+| [`lib\QuestDevice.ps1`](lib/QuestDevice.ps1) | Proximity sensor (+ the "Proximity sensor OFF" notification), `Invoke-QuestKeepAwakeSession`, `Invoke-QuestWifiOff`, `ConvertFrom-QuestProcNetAddress` |
+| [`lib\QuestBrowser.ps1`](lib/QuestBrowser.ps1) | Quest Browser process / activity checks, `Close-QuestBrowserIfEmpty`, `Invoke-QuestIncognitoProbe` |
+| [`lib\QuestDevTools.ps1`](lib/QuestDevTools.ps1) | Quest Browser over its DevTools socket: tabs, CDP, `chrome://flags` (insecure-origin flag, Reset all), history delete, *Recently closed* sweep |
+| [`lib\QuestSkybox.ps1`](lib/QuestSkybox.ps1) | SKYBOX VR Player: add / update / remove a WebDAV server in its database |
+
+## Using it from a script
+
+```powershell
+. (Join-Path $questToolsRepo 'QuestTools.ps1')          # top level of your script, not inside a function
+Initialize-QuestTools -AdbExe '' -Serial '' -QuestHost '' -Port 0 -RediscoverSec 60   # all optional
+$script:Adb = Find-QuestAdbExe
+$dev = Get-OnlineQuestSerial; if (-not $dev) { $dev = Connect-Quest }
+if ($dev) { Get-QuestWakefulness -DeviceSerial $dev }
+```
+
+Everything lands in your script scope: the helpers keep their state in $script:` variables (`Qt*`, `Adb`, `Skybox*`, `Quest*`). The SKYBOX server name ($script:SkyboxServerName`, default *Loop Segments*) and package ($script:SkyboxPackage`) can be set before or after loading.
+
+**Finding this repo.** Callers look, in order, at $env:QUEST_TOOLS_REPO`, `<ALL_SCRIPTS_ROOT>\quest_tools`, a `quest_tools` folder next to any parent folder of the caller (so `P:\all_scripts\quest_tools` for both `P:\all_scripts\3d_playlist_local` and `P:\all_scripts\iOS apps\ios_3d_loop_segments`), then `P:\all_scripts\quest_tools`, and set $env:QUEST_TOOLS_REPO` for their child processes. Use **one checkout** (no submodule, no copies): the helpers share one adb server and these `%TEMP%` files, so two versions at once would disagree:
+
+| File | What |
+|------|------|
+| `loopsegments-quest-last-adb.txt` | Last `ip:port` the headset was on adb at |
+| `loopsegments-adb-rediscover.txt` | Last adb server restart for mDNS rediscovery (at most every 5 min) |
+| `loopsegments-adb-stuck-reset.txt` | Last stuck-server reset (at most once a minute) |
+| `loopsegments-skybox-webdav.json` | SKYBOX servers this PC added |
+| `loopsegments-quest-lantab.log` | The log |
+
+The names keep their `loopsegments-` prefix so a companion started before the split and a newer helper agree.
+
+## Headset state
+
+**Reading the headset state.** Three `dumpsys` fields, each used for something different:
+
+| Field | Values | Meaning | Read by |
+|---|---|---|---|
+| `mWakefulness` (`dumpsys power`) | `Awake` / `Asleep` / `Dozing` | Display on or off | Open on Quest (open now or queue), keep-awake (never `prox_close` a headset that is not `Awake`) |
+| `Virtual proximity state` (`dumpsys vrpowermanager`) | `CLOSE` / `DISABLED` | The override: `CLOSE` = `prox_close` sent (pretend a face is there), `DISABLED` = real sensor (`automation_disable`, `-EnableProximity`) | Keep-awake (re-apply after a reboot), `-EnableProximity` (confirm) |
+| `State` + `Device idle state` (`dumpsys vrpowermanager`) | `HEADSET_MOUNTED` / standby; `Idle` / `Not idle` | The power manager's result, driven by the real or virtual sensor; idle = no motion for about a minute | After-quit helper: worn = `HEADSET_MOUNTED` **and** `Not idle` |
+
+With the override `CLOSE`, `State` is always `HEADSET_MOUNTED`, even on the desk, so during a session only `Not idle` tells worn from lying still. Headset on but not worn during a session: `Awake`, `CLOSE`, `HEADSET_MOUNTED`, `Idle`.
+
+## Proximity sensor
+
+`am broadcast -a com.oculus.vrpowermanager.prox_close` holds the sensor off (the headset acts as worn: it does not sleep, and stays on adb, when taken off); `...automation_disable` gives the real sensor back. A reboot clears the override. **Keep-awake** (`Invoke-QuestKeepAwakeSession`, `Invoke-QuestHeadset.ps1 -KeepAwakeSession -ParentPid N`) checks every ~20 s while process N runs and applies the override once the headset is on adb **and awake**: a headset in standby is left alone, since `prox_close` would wake it. `-RestoreProximity` turns the sensor back on when N exits, unless another keep-awake without it (a Loop Segments companion session) is still running.
+
+**Toggle by hand:** run [`Set-QuestProximitySensor.ps1`](Set-QuestProximitySensor.ps1) (for example right-click → *Run with PowerShell*; Loop Segments' `windows\quest\Set-QuestProximitySensor.ps1` runs it after its network check). With no arguments it flips the sensor (off = the headset stays awake and on adb when you take it off; on = it sleeps again). If the headset is not on adb yet (asleep, or its Wi-Fi just switched on after a quit switched it off), it keeps trying every 5 s for up to **2 minutes** (`-WaitSec`, `0` = once), so you can put the headset on or switch its Wi-Fi on meanwhile. Before every retry (not the first try) it restarts the PC's adb server: when the headset's Wi-Fi comes back on, wireless debugging gets a new port, and a running adb server can go on missing it over mDNS for minutes (seen: still nothing 40 s after a 2-minute run gave up; listed 4 s after a restart). Loop Segments' `Reset-QuestBrowserFlags.ps1` does the same. It then prints what it did and the final state (`Sensor is OFF ...` / `Sensor is ON ...`) or the error (headset not on adb, no adb, change not taken), and waits for Enter. `-State On` / `-State Off` force one; `-NoWait` skips the wait. While a keep-awake session runs (Loop Segments companion, 3d_playlist_local workflow), it switches the sensor off again within ~20 s of turning it on. While the sensor is off by hand, the headset shows a **"Proximity sensor OFF"** notification saying it stays awake and how to turn the sensor on again. Quest only lists notifications behind the bell (Meta button > bell), so the script then opens that list in front of you (`am start -n com.oculus.systemux/com.oculus.panelapp.notifications.NotificationsActivity`, awake headset only) and closes it again after **20 s** by removing that window's task (`am stack remove <id>`: Back, Home and Escape do not close it; the notification stays behind the bell; the script waits those 20 s; tested: closed, notification still listed). Other ways that did not work: the Navigator's own notifications activity sometimes brought up the Library instead, `cmd statusbar expand-notifications` opens Settings > Notifications, and Quest's own popups need a permission only Meta's system apps have); turning the sensor on, by hand or by the companion quit, removes it. Posted with `cmd notification post` as the Android shell; there is no remove command, so it is snoozed for a year instead. Keep-awake during a companion session does not post it.
+
+## Wi-Fi off
+
+**By hand:** [`Set-QuestWifiOff.ps1`](Set-QuestWifiOff.ps1) (or `Invoke-QuestHeadset.ps1 -WifiOff`) switches the headset's Wi-Fi off any time: Settings > Wi-Fi first on an awake headset (so switching it back on is one tap), then `cmd wifi set-wifi-enabled disabled`; adb drops right after, since it runs over that Wi-Fi. Like `Set-QuestProximitySensor.ps1` it waits up to 2 minutes for the headset on adb (`-WaitSec`). Exit codes 0 off, 1 headset not on adb, 2 no adb, 3 failed.
+
+Before the next session, switch Wi-Fi on in the headset's quick settings. Wireless debugging then comes back by itself on a new port, which the PC finds over mDNS (tested: listed 2 s after Wi-Fi came back on). Until then Open on Quest queues and keep-awake waits.
+
+## One-time setup
+
+### 1. PC: adb
+
+```powershell
+winget install Google.PlatformTools
+```
+
+Open a new terminal afterwards so `adb` is on PATH. (`Find-QuestAdbExe` also finds the winget, Android SDK, and Meta Quest Developer Hub copies on its own; `Initialize-QuestTools -AdbExe` / Loop Segments' `questAdbExe` overrides.)
+
+### 2. Quest: developer mode
+
+In the **Meta Horizon** phone app: Devices → your headset → Headset settings → **Developer mode** on. Reboot the headset.
+
+### 3. USB once: trust the PC
+
+Plug the Quest into the PC, put it on, and accept **Allow USB debugging** (tick *Always allow from this computer*). Check:
+
+```powershell
+adb devices -l
+```
+
+### 4. Keep wireless adb on across reboots: [adb-auto-enable](https://github.com/project-SIMPLE/adb-auto-enable)
+
+Quest switches wireless adb off on every reboot. adb-auto-enable turns it back on after boot (and auto-accepts the USB-debugging prompt). Download the APK from that repo's **Releases**, then with the Quest still on USB:
+
+```powershell
+adb install <path-to-downloaded>.apk
+adb shell pm grant eu.project_simple.adbautoenable android.permission.WRITE_SECURE_SETTINGS
+```
+
+Open **ADB Auto-Enable** on the headset once (Library → Unknown sources). With the permission granted it enables its own accessibility service. If it does not, run:
+
+```powershell
+adb shell "settings put secure enabled_accessibility_services eu.project_simple.adbautoenable/eu.project_simple.adbautoenable.AdbPopupAccessibilityService && settings put secure accessibility_enabled 1"
+```
+
+Verify (expect `granted=true`, the service name, `1`, `1`):
+
+```powershell
+adb shell dumpsys package eu.project_simple.adbautoenable | findstr WRITE_SECURE_SETTINGS
+adb shell settings get secure enabled_accessibility_services
+adb shell settings get secure accessibility_enabled
+adb shell settings get global adb_wifi_enabled
+```
+
+**After a reboot you do not need to open the app.** Android starts its accessibility service by itself at boot (on Quest 3: 13 s after boot), the service switches wireless adb back on, and the PC reconnects through mDNS before anyone opens the app. This depends on the accessibility service staying enabled: if a Horizon OS update or a settings reset turns it off, open **ADB Auto-Enable** once or rerun the `settings put secure enabled_accessibility_services ...` command above.
+
+Wireless adb gives full shell access to the headset: keep it on your home LAN only, and never port-forward it.
+
+### 5. How the PC finds the headset
+
+`Connect-Quest` ([`lib\QuestAdb.ps1`](lib/QuestAdb.ps1)) tries, in order (`-Serial` / `-QuestHost` / `-Port` / `-RediscoverSec` of `Initialize-QuestTools`, which Loop Segments fills from `questAdbSerial` / `questAdbHost` / `questAdbPort` / `questAdbRediscoverSec`):
+
+1. a Quest already listed by `adb devices -l` (or `questAdbSerial`);
+2. `adb connect <questAdbHost>:<questAdbPort>` (default `5555`) when `questAdbHost` is set;
+3. `adb connect` to the **last address the headset was on adb at** (`%TEMP%\loopsegments-quest-last-adb.txt`, saved whenever it is found; shared by Open on Quest, keep-awake and the history helper; 3 s timeout). Wireless debugging keeps its port until it is switched off or the headset reboots, so this gets the headset back at once, without mDNS: logged `Connected to the last known address 10.0.100.238:39923`. Measured after an adb server restart: mDNS listed the headset after 17 s once and not within 240 s another time, while the direct connect took 134 ms (and Open on Quest found it immediately). After a reboot or on another network it simply fails and the next steps run. It keeps `ip:port` as one value: the IP alone would not help, since the port is random. The IP usually stays the same per network (the router's DHCP hands the same address back to the headset's per-network MAC; seen all day: always `10.0.100.238` on ATT-WIFI-5pmY, `192.168.2.54` on ATT-WIFI-3pKe), so the port is what goes stale: a reboot, a wireless-debugging toggle, **or a Wi-Fi network switch** gives a new one (seen: `36483` → `39923` after the headset was moved back from `192.168.2.x`). The next mDNS find saves the new port;
+4. `adb mdns services` → the wireless-debugging TLS port (random, e.g. `10.0.100.238:37275`);
+5. if none of that has found the headset for **60 s** (`questAdbRediscoverSec`) and no adb device at all is connected: restart the PC's adb server (`adb kill-server`, `adb start-server`) and look over mDNS again. The adb server can stop hearing the headset's announcements after the headset sleeps and comes back on a new port; a restart makes it listen afresh. At most once every 5 min across all companion processes (`%TEMP%\loopsegments-adb-rediscover.txt`), logged as `adb: headset not seen over mDNS for 60 s - restarting the adb server`. `0` turns it off.
+
+**adb server hung (every adb command blocks).** Seen 2026-11-22: the headset was on USB and advertising over mDNS, but `adb devices`, `adb connect` and even `adb kill-server` never returned, and every PowerShell window running one froze with them. Two `adb.exe` processes were running, one holding `127.0.0.1:5037`. `adb kill-server` cannot fix this (it is a request to the stuck server), so the scripts handle it themselves ([`lib\QuestAdbServer.ps1`](lib/QuestAdbServer.ps1)):
+
+- **`Connect-Quest`** (`Repair-QuestAdbStuckServer`; used by Loop Segments' Open on Quest, keep-awake, the history helper, the 3d_playlist_local session's keep-awake, and `Invoke-QuestHeadset.ps1`): an `adb devices` that does not answer in 10 s counts as a stuck server, and the next reconnect resets it **at once** instead of waiting for step 5's 60 s. At most once a minute across all companion processes (`%TEMP%\loopsegments-adb-stuck-reset.txt`). Logged as `adb: ... the adb server looks stuck; resetting it`, then `adb: kill-server did not return in 5 s`, `adb: killing adb.exe (PID ...)`, `adb: server reset (killed)`. Step 5's restart uses the same reset.
+- **Set-QuestProximitySensor.ps1, Set-QuestWifiOff.ps1** and Loop Segments' **Reset-QuestBrowserFlags.ps1** (via [`QuestWrapperCommon.ps1`](QuestWrapperCommon.ps1)): the adb server restart before each retry now has timeouts (it used to run `adb kill-server` with none, which froze the window), and prints `adb: the adb server was stuck - killed it and started a fresh one.` when it had to.
+
+The reset: `adb kill-server` (5 s). Only when that does not return, or the old server is still running 1 s later, it kills the `adb.exe` listening on `127.0.0.1:5037` (whatever install it came from, e.g. Meta Quest Developer Hub's: every adb client talks to it) plus every `adb.exe` from the scripts' own adb path; other installs' `adb.exe` are left alone. Then `adb start-server`, started without handing down the caller's handles: a server inherits its client's open handles, and one started from a script whose output is piped held that pipe open, so the caller waited forever after the script had finished (seen in testing). Tested by suspending the adb server: `adb devices` timed out, the reset killed it in 10 s, and the headset reconnected.
+
+By hand (e.g. with no companion running), kill the processes, then reconnect to the port the headset advertises now:
+
+```powershell
+taskkill /F /IM adb.exe
+adb mdns services
+adb connect <ip:port from the _adb-tls-connect line>
+```
+
+`adb mdns services` starts a fresh server; the headset was listed at once (`10.0.100.238:46043`), and `adb connect` worked first try. Press Ctrl+C in, or close, any window still frozen on an adb command. To confirm before killing: `tasklist | findstr adb` (more than one `adb.exe` = suspect) and `netstat -ano | findstr :5037` (the server's PID).
+
+
+**Headset on another Wi-Fi network.** mDNS does not cross routers, so the PC finds the headset only while both are on the same network (subnet). Off it, the headset still answers ping at its new address, but `adb mdns services` stops listing it, `adb devices` shows the old serial as *offline*, and each switch gives wireless debugging a new port. Restarting the adb server does not help.
+
+**Use wireless debugging (mDNS); leave `questAdbHost` empty.** It needs no config and keeps working across reboots. It works once this PC is paired: if `adb mdns services` lists the headset but `adb connect` fails with an auth error, pair once: on the headset, Settings → System → Developer → **Wireless debugging** → *Pair device with pairing code*, then `adb pair <ip>:<pairing-port>` and type the code.
+
+**Optional fallback, fixed port 5555.** Only needed if mDNS discovery does not reach this PC (for example a VPN or Clash/mihomo TUN swallowing the multicast announcement, or the PC and Quest on different subnets), or if another tool insists on `IP:5555`. With the Quest on USB run `adb tcpip 5555`, then pass `-QuestHost <headset Wi‑Fi IP>` (Loop Segments: `"questAdbHost"` in `windows\loop-segments-windows.json`) (a DHCP reservation on the router keeps the IP stable). Limits: **a reboot closes 5555 again** (ADB Auto-Enable restores only the wireless-debugging port, and keeping 5555 needs root: `setprop persist.adb.tcp.port 5555` is refused on a stock Quest), and 5555 traffic is not encrypted (wireless debugging is). The script still falls back to mDNS when `IP:5555` does not answer.
+
+### 6. Test
+
+From this folder, with the headset awake:
+
+```powershell
+pwsh -File .\Invoke-QuestHeadset.ps1                       # read-only: adb path, serial, wakefulness, proximity override, last address
+pwsh -File .\Invoke-QuestHeadset.ps1 -ResetAdb             # restart the PC's adb server (every adb client here drops for a few seconds)
+pwsh -File .\Set-QuestProximitySensor.ps1 -State Off       # sensor off (stays awake); no -State = toggle; waits for Enter
+pwsh -File .\Set-QuestWifiOff.ps1                          # headset Wi-Fi off now
+```
+
+Exit codes (all scripts): 0 ok, 1 headset not reachable, 2 no adb / bad arguments, 3 step failed.
+
+## SKYBOX database
+
+[`lib\QuestSkybox.ps1`](lib/QuestSkybox.ps1) (`Invoke-QuestSkyboxWebDav`) adds, updates or removes a WebDAV server in SKYBOX VR Player's **Network** list. SKYBOX (`xyz.skybox.player.ovr`) keeps those servers in an SQLite file on the headset's shared storage, `/sdcard/Android/data/xyz.skybox.player.ovr/files/SkyboxDataBase` (table `DeviceDataTable`); a WebDAV server is one row: `Url` `webdav://<host>:<port>/`, `FileName` (the name shown), `Username`, and `Password` **in plain text** (SKYBOX stores it that way itself). The servers this PC added are listed (URLs only) in `%TEMP%\loopsegments-skybox-webdav.json`. Loop Segments drives it from its control page and companion quit (its README: *SKYBOX: phone as a WebDAV server*).
+
+How a change is made: the file is copied to a new folder in `%TEMP%` (the headset has no `sqlite3`) and checked with `sqlite3.exe` (shipped with adb in platform-tools; the SQL goes in on stdin, so the password is never on a command line or in the log) while SKYBOX keeps running. If the row is already right (or already gone), nothing else happens and SKYBOX is not touched. Otherwise SKYBOX is **stopped** (`am force-stop`; it holds the file open and would keep writing the old copy), the edit is refused if a `SkyboxDataBase-wal` or `SkyboxDataBase-journal` file sits next to it (see WAL mode below), the file is copied again only if its size or modified time moved, then edited, checked (`PRAGMA integrity_check`), pushed to a temp name and moved over the original. That move runs in **one headset shell command together with a last check**: it happens only if SKYBOX is still stopped, no `-wal` / `-journal` has appeared, and the database still has the size and modified time of the copy that was edited. Copying, editing and pushing take 5-15 s, and you may open SKYBOX in that time; if any check fails the pushed copy is deleted, SKYBOX's own file is left as it is, the log says why (`not replacing the database: SKYBOX was opened / a journal file appeared / SKYBOX saved to it ...`), and the button reports *failed*: press it again. The `%TEMP%` folder is always deleted. The adb shell cannot write SKYBOX's file in place but can replace it; SKYBOX keeps using the replaced file. Each copy moves the whole file (about 60 MB, 5-10 s over Wi-Fi), so with this on the companion waits up to **60 s** for the close-time cleanup instead of 40 s.
+
+**Reopening SKYBOX needs the headset in use.** An adb launch only asks Horizon OS to start SKYBOX; the OS first has to place its window in your space. With the headset lying still (head tracking idle, even when the proximity override keeps it awake) that placement never answers, and after 10 s the launch is dropped without an error to adb: the headset log shows `Timeout while requesting window placement`, and no SKYBOX process starts. Worn or moving, the same launch starts SKYBOX at once. So after a Push / Update with nobody in the headset, SKYBOX may stay closed; open it yourself. The database change does not depend on this: it never needs SKYBOX running.
+
+### If SKYBOX changes how it stores servers
+
+This relies on details of SKYBOX 2.0.2 (version code 3868, checked 2026-11-12) that SKYBOX does not document and can change in any update. The plain-text password is the one that makes the full sign-in possible, and the one most likely to change. The log (`%TEMP%\loopsegments-quest-lantab.log`, lines starting `SKYBOX:`) shows which case you are in:
+
+| If SKYBOX... | What you see | What the companion does | Workaround |
+|---|---|---|---|
+| **encrypts saved passwords** | **Loop Segments** shows in Network but asks for the login, or fails to sign in. The log still says `added` | Writes the plain password anyway; SKYBOX cannot use it. No harm to other servers | Use a blank password: the server still appears and SKYBOX asks for the username and password when you open it (tested with 2.0.2). Type them once per session; the close-time removal deletes what SKYBOX saved. Today that needs a one-line change (`-Password ''` in `Invoke-QuestSkyboxWebDavPush`); there is no setting for it yet |
+| **renames the table or columns** | `SKYBOX: database read failed: ...` | Reads fail before any edit, so nothing is pushed; the button reports *failed* | Pull a copy (`adb pull <path>`), look at the schema (`sqlite3 SkyboxDataBase .schema`), add one WebDAV server by hand and compare, then update [`lib\QuestSkybox.ps1`](lib/QuestSkybox.ps1) |
+| **moves the database or changes its package name** | `SKYBOX: not installed on the headset` or `no database yet` | Skips | Find the new path (`adb shell pm list packages` and look for skybox, then `adb shell ls -R /sdcard/Android/data/<package>`) and update `$script:SkyboxPackage` / `$script:SkyboxDbPath` |
+| **switches SQLite to WAL mode** (or was killed mid-save) | `SKYBOX: database has a journal file next to it` | Refuses to edit (the main file alone would not hold SKYBOX's latest data); SKYBOX is started again if it was open | Open and close SKYBOX once (it folds the journal back in). If it keeps happening, SKYBOX moved to WAL: the edit would have to pull and push the `-wal` file too |
+| **moves its data to private storage**, or Horizon OS blocks adb from `Android/data` | `SKYBOX: could not copy the database from the headset` | Skips | No adb workaround on a stock headset (`run-as` is refused: SKYBOX is not debuggable). Add the server by hand: Network → Add → Add WebDAV server, `http://<phone>:8765/`, `admin` / the app password |
+
+**WAL mode, and why the journal check:** SQLite saves changes one of two ways. SKYBOX 2.0.2 uses the default **rollback journal** (`PRAGMA journal_mode` reports `delete`): changes go straight into `SkyboxDataBase`, and a `SkyboxDataBase-journal` holding the old contents exists only during a save, so a crash can be undone. With SKYBOX stopped, the main file is the whole, current database, which is what makes copy, edit and push back safe. In **WAL (write-ahead log)** mode, which an app turns on with one setting (`PRAGMA journal_mode=WAL`), new changes go to `SkyboxDataBase-wal` first and reach the main file only from time to time, so the real database is the main file plus `-wal`. Editing only the main file would drop what is still in `-wal` (recent servers, playback positions, folder listings), and a leftover `-wal` that no longer matches can corrupt the database. So after stopping SKYBOX the edit checks for either file and refuses if one is there. A `-journal` usually means SKYBOX was killed mid-save; opening and closing SKYBOX once clears it. A `-wal` that keeps coming back means SKYBOX switched to WAL: the edit would then have to pull and push the `-wal` file with the database (or fold it in first with `PRAGMA wal_checkpoint(TRUNCATE)` on the copy).
+
+None of these stops the rest of the companion: each case is logged and skipped. To turn the feature off while you sort it out, set `"questSkyboxWebDav": false`.
