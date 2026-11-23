@@ -20,12 +20,14 @@
 #                        Recently closed
 # lib\QuestOrigins.ps1   shared list of origins opened in Quest Browser by any project
 #                        (Register-QuestBrowserOrigin, Get-QuestRegisteredOrigins): every cleanup uses it
+# lib\QuestPc.ps1        this PC as the headset sees it: Get-QuestPcAddress, Resolve-QuestPcHost (its name
+#                        when the headset resolves it); Start-QuestHiddenProcess, Get-QuestPwshExe
 # lib\QuestOpen.ps1      Wait-QuestHeadsetAwake, Open-QuestPage (Push to Quest: registered, normal or
 #                        signed in, isSecureContext + insecure-origin flag fix)
 # lib\QuestCleanup.ps1   Invoke-QuestBrowserCleanup: close our tabs, delete our history and Recently
 #                        closed items, close the browser when empty (Clear-QuestHistoryAndClosed)
 # lib\QuestHelperPage.ps1 the sweep's helper page: Resolve-QuestHelperUrl (a project's page, else one
-#                        served from this PC), Get-QuestPcAddress
+#                        served from this PC)
 # lib\QuestHistoryRetry.ps1 after-quit history helper: Start-QuestHistoryRetry hands a failed delete
 #                        to Invoke-QuestHistoryRetry.ps1 (detached; deletes once the headset is worn),
 #                        Stop-QuestHistoryRetry, Get-QuestHistoryRetryProcesses
@@ -51,7 +53,7 @@ if (-not (Get-Variable -Name AdbRediscoverSec -Scope Script -ErrorAction Silentl
 if (-not (Get-Variable -Name Adb -Scope Script -ErrorAction SilentlyContinue)) { $script:Adb = $null }
 $script:LastConnectMsg = ''
 
-foreach ($qtLib in 'QuestLog', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestOpen', 'QuestHelperPage', 'QuestCleanup', 'QuestHistoryRetry', 'QuestSkybox') {
+foreach ($qtLib in 'QuestLog', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestPc', 'QuestOpen', 'QuestHelperPage', 'QuestCleanup', 'QuestHistoryRetry', 'QuestSkybox') {
     . (Join-Path $PSScriptRoot "lib\$qtLib.ps1")
 }
 Remove-Variable -Name qtLib -ErrorAction SilentlyContinue

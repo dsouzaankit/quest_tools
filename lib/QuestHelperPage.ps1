@@ -7,25 +7,12 @@
 # closed, phone off the LAN), no visit is recorded and the swept items stay. Then the same kind of page
 # is served from this PC instead: Resolve-QuestHelperUrl -PreferredUrl <page> -FallbackPort <port>.
 #
-#   $h = Resolve-QuestHelperUrl -PreferredUrl 'http://10.0.100.10:8765/xr-assets/lsclean' -FallbackPort 18767 -PcAddress (Get-QuestPcAddress -DeviceSerial $dev)
+#   $h = Resolve-QuestHelperUrl -PreferredUrl 'http://10.0.100.10:8765/xr-assets/lsclean' -FallbackPort 18767 -PcAddress (Get-QuestPcAddress -DeviceSerial $dev)   # QuestPc.ps1
 #   $h.Url             # the page to use (decided once per process)
 #   $h.FallbackOrigin  # http://<pc>:<port> when the PC serves it, else $null: delete it with ours
 
 $script:QtHelperPage = $null
 $script:QtHelperPageMarker = '<!-- loopsegments-lsclean -->'
-
-# This PC's IPv4 address on the route to -Target (or to the headset of a wireless adb serial
-# ip:port). UDP "connect" sends nothing. $null when unknown.
-function Get-QuestPcAddress {
-    param([string] $DeviceSerial = '', [string] $Target = '')
-    if (-not $Target -and $DeviceSerial -match '^(\d{1,3}(?:\.\d{1,3}){3}):\d+$') { $Target = $Matches[1] }
-    if (-not $Target) { return $null }
-    $u = [System.Net.Sockets.UdpClient]::new()
-    try {
-        $u.Connect($Target, 9)
-        return ([System.Net.IPEndPoint]$u.Client.LocalEndPoint).Address.ToString()
-    } catch { return $null } finally { $u.Dispose() }
-}
 
 function Test-QuestTcpOpen {
     param([string] $HostName, [int] $Port, [int] $TimeoutMs = 2000)
