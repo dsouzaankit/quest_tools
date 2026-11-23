@@ -55,7 +55,7 @@ The names keep their `loopsegments-` prefix so a companion started before the sp
 `xr\` is the one editable copy of the WebXR player engine both projects' Quest pages run: 180° SBS domes
 (VR180 half sphere, equidistant fisheye 180, or a flat screen: `window.__xrProjection`), chroma key over
 passthrough, per-eye WebGL layers (left dome layer 1, right dome layer 2) in **Enter VR and Enter AR**
-(`window.__xrArStereo = false` = the old mono AR), the AV1 render-target path (MP4 `av01` and Matroska
+(SBS off = one picture to both eyes), the AV1 render-target path (MP4 `av01` and Matroska
 `V_AV1`), and the `xr_debug.json` log ring. Each page keeps its own `xr-app.js` / `xr-player.html` (playlists,
 server URLs) and sets those `window.__xr*` knobs.
 
