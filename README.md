@@ -22,6 +22,7 @@ Log: `%TEMP%\loopsegments-quest-lantab.log` (one log for all of them).
 | [`lib\QuestBrowser.ps1`](lib/QuestBrowser.ps1) | Quest Browser process / activity checks, `Close-QuestBrowserIfEmpty`, `Invoke-QuestIncognitoProbe` |
 | [`lib\QuestDevTools.ps1`](lib/QuestDevTools.ps1) | Quest Browser over its DevTools socket: tabs, CDP, `chrome://flags` (insecure-origin flag, Reset all), history delete, *Recently closed* sweep |
 | [`lib\QuestSkybox.ps1`](lib/QuestSkybox.ps1) | SKYBOX VR Player: add / update / remove a WebDAV server in its database |
+| [`xr\`](xr) | Quest XR player engine for Quest Browser pages: `xr-components.js` (A-Frame components), vendored `aframe.min.js` 1.6.0 + license, [`Sync-QuestXrEngine.ps1`](xr/Sync-QuestXrEngine.ps1). See [XR player engine](#xr-player-engine) |
 
 ## Using it from a script
 
@@ -35,7 +36,7 @@ if ($dev) { Get-QuestWakefulness -DeviceSerial $dev }
 
 Everything lands in your script scope: the helpers keep their state in $script:` variables (`Qt*`, `Adb`, `Skybox*`, `Quest*`). The SKYBOX server name ($script:SkyboxServerName`, default *Loop Segments*) and package ($script:SkyboxPackage`) can be set before or after loading.
 
-**Finding this repo.** Callers look, in order, at $env:QUEST_TOOLS_REPO`, `<ALL_SCRIPTS_ROOT>\quest_tools`, a `quest_tools` folder next to any parent folder of the caller (so `P:\all_scripts\quest_tools` for both `P:\all_scripts\3d_playlist_local` and `P:\all_scripts\iOS apps\ios_3d_loop_segments`), then `P:\all_scripts\quest_tools`, and set $env:QUEST_TOOLS_REPO` for their child processes. Use **one checkout** (no submodule, no copies): the helpers share one adb server and these `%TEMP%` files, so two versions at once would disagree:
+**Finding this repo.** Callers look, in order, at `$env:QUEST_TOOLS_REPO`, `<ALL_SCRIPTS_ROOT>\quest_tools`, a `quest_tools` folder next to any parent folder of the caller (so `P:\all_scripts\quest_tools` for both `P:\all_scripts\3d_playlist_local` and `P:\all_scripts\iOS apps\ios_3d_loop_segments`), then `P:\all_scripts\quest_tools`, and set `$env:QUEST_TOOLS_REPO` for their child processes. Use **one checkout** (no submodule, no copies): the helpers share one adb server and these `%TEMP%` files, so two versions at once would disagree:
 
 | File | What |
 |------|------|
@@ -46,6 +47,27 @@ Everything lands in your script scope: the helpers keep their state in $script:`
 | `loopsegments-quest-lantab.log` | The log |
 
 The names keep their `loopsegments-` prefix so a companion started before the split and a newer helper agree.
+
+## XR player engine
+
+`xr\` is the one editable copy of the WebXR player engine both projects' Quest pages run: 180° SBS domes
+(VR180 half sphere, equidistant fisheye 180, or a flat screen: `window.__xrProjection`), chroma key over
+passthrough, per-eye WebGL layers (left dome layer 1, right dome layer 2) in **Enter VR and Enter AR**
+(`window.__xrArStereo = false` = the old mono AR), the AV1 render-target path (MP4 `av01` and Matroska
+`V_AV1`), and the `xr_debug.json` log ring. Each page keeps its own `xr-app.js` / `xr-player.html` (playlists,
+server URLs) and sets those `window.__xr*` knobs.
+
+- **3d_playlist_local** (`individual_transcode\xr\serve_xr_page.py`): serves `/xr-assets/xr-components.js`,
+  `aframe.min.js` straight from this folder (found like the rest of this repo).
+- **Loop Segments** (`ios\LoopSegments\Resources`): the IPA is built on GitHub Actions from that repo alone,
+  so it bundles a **generated copy**. After editing the engine run `xr\Sync-QuestXrEngine.ps1` (default
+  target: `..\iOS apps\ios_3d_loop_segments\ios\LoopSegments\Resources`, or `$env:LOOPSEGMENTS_IOS_REPO`) and commit
+  that copy; its `deploy.ps1` runs `-Check` and stops on a stale copy. Never edit the copy there.
+
+A-Frame stays at 1.6.0: the first-VR-after-AR repair (`xr-enabled-fixed`), the eye layers and the canvas
+texture reset depend on how it behaves. An upgrade means replacing `aframe.min.js` + the license here and a
+full headset retest (AR then VR, Chroma on and off, Fullscreen) on both pages. Debug log fields: Loop Segments'
+`.cursor/skills/xr-debug/SKILL.md`.
 
 ## Headset state
 
