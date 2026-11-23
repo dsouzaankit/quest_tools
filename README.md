@@ -2,8 +2,10 @@
 
 Generic PowerShell 7 helpers for a Meta Quest (tested on Quest 3) on **wireless adb**, split out of [ios_3d_loop_segments](../iOS%20apps/ios_3d_loop_segments) (`windows\quest\`, commit e865041). Used by:
 
-- **Loop Segments** (`ios_3d_loop_segments\windows\quest\`): the PC companion's Open on Quest, Quest control page, quit cleanup (`Watch-LoopSegmentsQuestLanTab.ps1` loads this repo);
-- **3d_playlist_local** (`individual_transcode\quest\`): the workflow's Quest session (through Loop Segments' scripts, plus `Find-QuestAdbExe` / `Invoke-Adb` / `Get-QuestWakefulness` / `Register-QuestBrowserOrigin` directly).
+- **Loop Segments** (`ios_3d_loop_segments\windows\quest\`): the PC companion's Open on Quest, its tiles on the Quest control page, quit cleanup (`Watch-LoopSegmentsQuestLanTab.ps1` loads this repo);
+- **3d_playlist_local** (`individual_transcode\quest\`): the workflow's Quest session: keep-awake, its tiles on the Quest control page, the page on the headset, End session and the cleanup (`Invoke-QuestHeadset.ps1` modes and this repo's functions directly; it does not need Loop Segments).
+
+The **Quest control page** both use is hosted here: one page, one port, filled with each project's own tiles. See [Quest control page](#quest-control-page).
 
 It also holds the shared **Quest XR player engine** (`xr\`, A-Frame / WebXR JavaScript) that both projects' Quest Browser pages run: Loop Segments' `/xr` and 3d_playlist_local's PC XR page. See [XR player engine](#xr-player-engine).
 
@@ -14,7 +16,9 @@ Log: `%TEMP%\loopsegments-quest-lantab.log` (one log for all of them).
 | File | What |
 |------|------|
 | [`QuestTools.ps1`](QuestTools.ps1) | Loader: dot-source it, then `Initialize-QuestTools` (optional) and $script:Adb = Find-QuestAdbExe` |
-| [`Invoke-QuestHeadset.ps1`](Invoke-QuestHeadset.ps1) | Command line: `-Status` (default, read-only), `-ResetAdb`, `-EnableProximity` / `-DisableProximity` / `-ToggleProximity`, `-WifiOff`, `-KeepAwakeSession -ParentPid N [-RestoreProximity]` |
+| [`Invoke-QuestHeadset.ps1`](Invoke-QuestHeadset.ps1) | Command line: `-Status` (default, read-only), `-ResetAdb`, `-EnableProximity` / `-DisableProximity` / `-ToggleProximity`, `-WifiOff`, `-KeepAwakeSession -ParentPid N [-RestoreProximity]`, `-OpenControlPage [-ParentPid N] [-WaitMinutes M] [-StatusFile F]`, `-Cleanup` (see [End-of-session cleanup](#end-of-session-cleanup)) |
+| [`QuestControlHost.ps1`](QuestControlHost.ps1), [`Register-QuestControlTiles.ps1`](Register-QuestControlTiles.ps1) | The [Quest control page](#quest-control-page) host, and the command line to add / remove a project's tiles |
+| [`quest-tools.example.json`](quest-tools.example.json) | [Settings](#settings) keys (copy to `quest-tools.json`, per PC, git-ignored) |
 | [`Set-QuestProximitySensor.ps1`](Set-QuestProximitySensor.ps1), [`Set-QuestWifiOff.ps1`](Set-QuestWifiOff.ps1) | Double-click tools: retry until the headset is on adb, show the result, wait for Enter |
 | [`Find-QuestWifiNetwork.ps1`](Find-QuestWifiNetwork.ps1) | Double-click tool: cycle this PC through its saved Wi-Fi networks (current first, then in range, then the rest) until the headset is on wireless adb (USB entries skipped; with the headset on USB, only its own Wi-Fi entry counts); stays on that network, else goes back. Exit 0 found, 1 not found, 2 no adb / no Wi-Fi |
 | [`QuestWrapperCommon.ps1`](QuestWrapperCommon.ps1) | Their shared retry loop and closing message |
@@ -31,6 +35,9 @@ Log: `%TEMP%\loopsegments-quest-lantab.log` (one log for all of them).
 | [`lib\QuestHistoryRetry.ps1`](lib/QuestHistoryRetry.ps1), [`Invoke-QuestHistoryRetry.ps1`](Invoke-QuestHistoryRetry.ps1) | After-quit history helper: `Start-QuestHistoryRetry` hands a failed delete to a detached helper that does it once the headset is worn; `Stop-QuestHistoryRetry`, `Get-QuestHistoryRetryProcesses`. See [After-quit history helper](#after-quit-history-helper) |
 | [`lib\QuestCleanup.ps1`](lib/QuestCleanup.ps1) | `Invoke-QuestBrowserCleanup` (close our tabs, delete our history and *Recently closed* items, close the browser when empty), `Clear-QuestHistoryAndClosed` |
 | [`lib\QuestSkybox.ps1`](lib/QuestSkybox.ps1) | SKYBOX VR Player: add / update / remove a WebDAV server in its database |
+| [`lib\QuestSettings.ps1`](lib/QuestSettings.ps1) | `Get-QuestToolsSettings`, `Initialize-QuestToolsFromSettings`, `Get-QuestHistoryFallbackRange`. See [Settings](#settings) |
+| [`lib\QuestControl.ps1`](lib/QuestControl.ps1) | The control page from a script: `Register-QuestControlTiles`, `Unregister-QuestControlTiles`, `Open-QuestControlPage`, `Get-QuestControlPcLink`, `Get-QuestControlToken`, `Get-QuestControlHost` |
+| [`lib\QuestSession.ps1`](lib/QuestSession.ps1) | `Invoke-QuestSessionCleanup`: the end-of-session cleanup |
 | [`xr\`](xr) | Quest XR player engine for Quest Browser pages: `xr-components.js` (A-Frame components), vendored `aframe.min.js` 1.6.0 + license, [`Sync-QuestXrEngine.ps1`](xr/Sync-QuestXrEngine.ps1). See [XR player engine](#xr-player-engine) |
 
 ## Using it from a script
@@ -89,6 +96,58 @@ if ($w.Serial) { Open-QuestPage -DeviceSerial $w.Serial -Url $url -Owner 'myproj
 - **Host name:** `Resolve-QuestPcHost -DeviceSerial -Ip -Mode` picks the host for the page's URL. `auto`: this PC's name, `<COMPUTERNAME>.local` then `<COMPUTERNAME>`, when the headset resolves it to this PC (checked over adb with `ping -c 1 <name>`: the `PING name (a.b.c.d)` line counts even with no reply, since Windows Firewall drops ICMP echo by default), else the IPv4; `ip`: always the IPv4; any other value: that host name (e.g. a router DNS name for a DHCP reservation). A name keeps the page's origin, and so its `chrome://flags` insecure-origin entry and its history entries, the same when DHCP hands this PC another address; with the IPv4, a new address means one more flag fix and browser restart. Logged `<label>the headset resolves <name> to <ip>, not this PC (...) - not used.` when it points elsewhere.
 - **Windows Firewall** must let the headset in on the page's port (private network): Python for 3d_playlist_local's XR server, pwsh for Loop Segments' control page and the helper page.
 - **Hidden helpers:** `Start-QuestHiddenProcess -Script <ps1> -Arguments @(...)` starts `pwsh -File` with no window (each argument passed as is, spaces included) and returns the process; `Get-QuestPwshExe` finds PowerShell 7.
+## Quest control page
+
+One small signed-in page on **this PC's LAN address** for Quest Browser, shared by every project that uses the headset: [`QuestControlHost.ps1`](QuestControlHost.ps1), port `controlPort` (default **18766**). A project adds its own **tiles** for as long as one of its processes runs; the host starts with the first registration and exits once no registered process is alive (an open page reloads itself when the set of projects changes). Today: Loop Segments (SKYBOX, PC ↔ phone LAN) while its companion runs, 3d_playlist_local (Session Control: Space, End session, segment bitrate) while a workflow runs.
+
+```powershell
+Register-QuestControlTiles -Owner playlist -OwnerPid $workflowPid -Module .\PlaylistControlTiles.ps1   # lib\QuestControl.ps1
+Open-QuestControlPage -DeviceSerial $dev            # its own signed-in Quest Browser tab (opens its own DevTools session)
+Get-QuestControlPcLink                              # http://127.0.0.1:<port>/pc?t=<token> for a PC browser
+```
+
+From a script that does not load quest_tools: `pwsh -File Register-QuestControlTiles.ps1 -Owner <name> -OwnerPid <pid> -Module <path>` (or `-Owner <name> -Unregister`); prints `{ ok, port, pid, started, pcLink }`. From the command line, `Invoke-QuestHeadset.ps1 -OpenControlPage -ParentPid <pid>` waits for an awake headset (until that process exits; `-WaitMinutes` caps it) and opens the page there.
+
+**Tile module**: a `.ps1` the host dot-sources once (its functions land in the host's scope: prefix them with the project's name), whose last statement returns a hashtable:
+
+| Key | What |
+|-----|------|
+| `Label` | Name in the page header |
+| `Tiles` | `@( @{ Column = 0, 1 or 'wide'; Order = 10; Html = '<section>...</section>' } )`; column 1 starts with the built-in speed test tile |
+| `Script` | JavaScript, run once in its own function. `QC.register('<owner>', fn)`: `fn(status, all)` gets this project's `Status` result on every poll and may return the poll delay it wants (ms; the smallest wins, default 10 s). Helpers: `QC.$`, `QC.post(path)` (sends the action header; returns `{ ok, status, json }`), `QC.schedule(ms)`, `QC.onQuest`, `QC.mbps` |
+| `Status` | `{ ... }` returning an object, shown in `/status.json` under `owners.<owner>` |
+| `Routes` | `@{ '/path' = { param($Ctx) ...; @{ Code = 200; Body = <object> } } }`: `POST` only, with the action header; `$Ctx.Remote`, `$Ctx.Query` |
+| `Login` | `{ @{ User; Password } }`: also accept HTTP Basic with this login (Loop Segments: the phone LAN login, which its PC extension answers) |
+| `OnSpeedTest` | `{ param($Result) ... }` after each PC → Quest measurement |
+
+**Built-in tile: LAN bandwidth PC → Quest.** On the headset the page downloads **64 MB** from this PC (`GET /speedtest/blob`, random bytes, timed from the first byte) and posts bytes and milliseconds back (`POST /speedtest/result`, recorded only from a non-loopback client). It runs by itself each time the page opens on the Quest (unless a result under 2 min old exists), and with its button. The measurement goes to `%TEMP%\quest-lan-throughput.json` (`{ ok, measuredMbps, bytes, seconds, client, measuredAtUtc }`); what it means for a project (3d_playlist_local: the minute-segment bitrate) is that project's logic.
+
+**Sign-in.** Reachable from the LAN, so every request must pass all of: client address loopback or private (`10/8`, `172.16/12`, `192.168/16`, `169.254/16`); `Host` header an IP literal or `localhost` (no DNS names: blocks DNS rebinding); signed in, with the `qcpc` cookie or HTTP Basic with a module's `Login` (a failed sign-in waits 1 s); actions `POST` with header `X-Quest-Control: 1` (a form or link on another site cannot send it, and the cross-origin preflight is refused). The cookie comes from the token in `%TEMP%\loopsegments-quest-control-pctoken.txt` (kept across sessions): `/pc?t=<token>` from loopback (the link a workflow window prints), `/s?t=<token>` from the LAN (what `Open-QuestControlPage` types on the headset). Both swap the token for an HttpOnly `SameSite=Strict` cookie and redirect to `/`, so the tab's URL and history carry no token. The control page's origin is registered in the shared origin list, so every cleanup closes its tab and deletes its history.
+
+One request at a time, handled only once a connection has sent one (Quest Browser opens spare connections that send nothing; those are closed after 10 s). The page sends `Content-Security-Policy`, `X-Frame-Options: DENY` and `Cache-Control: no-store`. **Windows Firewall** must allow inbound TCP on the port on the Private network (the *PowerShell 7* allow rule for `pwsh.exe` does). Host log: `%TEMP%\quest-control-host.log`. State: `%TEMP%\quest-control-tiles.json` (registered projects), `%TEMP%\quest-control-host.json` (port, pid; also written as `loopsegments-quest-control.json` for older callers).
+
+## End-of-session cleanup
+
+`Invoke-QuestHeadset.ps1 -Cleanup` (`Invoke-QuestSessionCleanup`, [`lib\QuestSession.ps1`](lib/QuestSession.ps1)), for a project's quit: tabs on our pages closed and their history (+ *Recently closed*) deleted within ~28 s ([Quest Browser cleanup](#quest-browser-cleanup)), Quest Browser closed when only empty pages are left, the proximity sensor back on, the **Wi-Fi off** last. "Our pages" are every origin in the shared origin list (each project registers what it opens, the control page included) plus `-ExtraOrigins a,b`. The *Recently closed* helper page is `-HelperUrl`, else the one served from this PC on `controlPort + 1`. Not on adb, or Quest Browser not answering (nobody wearing it): the delete goes to the [after-quit helper](#after-quit-history-helper), which switches the Wi-Fi off after it (`-StopIfCommandLine <regex>` stops that helper when a matching process starts). Choices not given follow the [settings](#settings) (`-CloseTabs` / `-KeepTabs`, `-SkipHistory`, `-WifiOff` / `-KeepWifi`, `-KeepProximity`). Exit 0 done, 1 not on adb (handed to the helper), 3 incomplete, 4 history postponed; logs `Cleanup: finished ...`.
+
+## Settings
+
+`quest-tools.json` next to `QuestTools.ps1` (per PC, git-ignored; [`quest-tools.example.json`](quest-tools.example.json) lists every key). A key missing there falls back to the older `quest*` key in `ios_3d_loop_segments\windows\loop-segments-windows.json` (read as plain JSON when a Loop Segments checkout is around), then to the default. `Initialize-QuestToolsFromSettings` applies the adb ones.
+
+| Key | Older key | Default | What |
+|-----|-----------|---------|------|
+| `adbExe` | `questAdbExe` | `""` | Full path to `adb.exe` (empty = auto) |
+| `adbSerial` | `questAdbSerial` | `""` | Only this adb serial counts as the headset |
+| `adbHost` / `adbPort` | `questAdbHost` / `questAdbPort` | `""` / `5555` | `adb connect` target before mDNS |
+| `adbRediscoverSec` | `questAdbRediscoverSec` | `60` | Restart the adb server after this long without the headset (`0` = never) |
+| `controlPort` | `questControlPort` | `18766` | Quest control page port (`+ 1`: the PC-served helper page) |
+| `closeTabsOnExit` | `questCloseLanTabsOnExit` | `true` | `-Cleanup` closes our tabs |
+| `clearHistoryOnExit` | `questClearHistoryOnExit` | `true` | `-Cleanup` deletes their history |
+| `clearHistoryFallback` | `questClearHistoryFallback` | `day` | Range cleared when the per-entry delete fails (`hour`, `day`, `week`, `fourweeks`, `all`, `none`) |
+| `historyRetryMinutes` | `questHistoryRetryMinutes` | `120` | How long the after-quit helper waits for the headset to be worn |
+| `wifiOffOnExit` | `questWifiOffOnExit` | `true` | `-Cleanup` switches the Wi-Fi off last |
+| `ensureInsecureOriginFlag` | `questEnsureInsecureOriginFlag` | `true` | Fix the insecure-origin flag when an opened page is not a secure context |
+
 ## Quest Browser cleanup
 
 Every page a project opens on the headset is **registered when it opens**, with an owner name, in `%TEMP%\quest-browser-origins.json` ([`lib\QuestOrigins.ps1`](lib/QuestOrigins.ps1)): Loop Segments registers its phone LAN page (`loopsegments`) and the Quest control page (`loopsegments-control`), 3d_playlist_local its PC XR page (`3d_playlist_local-xr`). Origins are stored as `scheme://host:port` (no login, path or query).

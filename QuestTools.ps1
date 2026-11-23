@@ -32,6 +32,11 @@
 #                        to Invoke-QuestHistoryRetry.ps1 (detached; deletes once the headset is worn),
 #                        Stop-QuestHistoryRetry, Get-QuestHistoryRetryProcesses
 # lib\QuestSkybox.ps1    SKYBOX VR Player: add / update / remove a WebDAV server in its database
+# lib\QuestSettings.ps1  Get-QuestToolsSettings (quest-tools.json, falling back to the older
+#                        loop-segments-windows.json quest* keys), Initialize-QuestToolsFromSettings
+# lib\QuestControl.ps1   the shared Quest control page (QuestControlHost.ps1): Register-QuestControlTiles,
+#                        Open-QuestControlPage, Get-QuestControlPcLink, Get-QuestControlToken
+# lib\QuestSession.ps1   end-of-session cleanup: Invoke-QuestSessionCleanup (tabs, history, sensor, Wi-Fi)
 #
 # State shared across processes (keep these names: a running caller and a newer one must agree):
 #   %TEMP%\loopsegments-quest-last-adb.txt    last ip:port the headset was on adb at
@@ -53,7 +58,7 @@ if (-not (Get-Variable -Name AdbRediscoverSec -Scope Script -ErrorAction Silentl
 if (-not (Get-Variable -Name Adb -Scope Script -ErrorAction SilentlyContinue)) { $script:Adb = $null }
 $script:LastConnectMsg = ''
 
-foreach ($qtLib in 'QuestLog', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestPc', 'QuestOpen', 'QuestHelperPage', 'QuestCleanup', 'QuestHistoryRetry', 'QuestSkybox') {
+foreach ($qtLib in 'QuestLog', 'QuestSettings', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestPc', 'QuestOpen', 'QuestHelperPage', 'QuestCleanup', 'QuestHistoryRetry', 'QuestSkybox', 'QuestControl', 'QuestSession') {
     . (Join-Path $PSScriptRoot "lib\$qtLib.ps1")
 }
 Remove-Variable -Name qtLib -ErrorAction SilentlyContinue

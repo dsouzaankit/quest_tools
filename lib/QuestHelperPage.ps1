@@ -82,17 +82,20 @@ function Resolve-QuestHelperUrl {
     if ($script:QtHelperPage) { return $script:QtHelperPage }
     $u = $null
     try { $u = [Uri]$PreferredUrl } catch {}
-    if (-not $u -or -not $u.IsAbsoluteUri) { return [pscustomobject]@{ Url = $PreferredUrl; FallbackOrigin = $null } }
-    if (Test-QuestTcpOpen -HostName $u.Host -Port $u.Port) {
+    # No project page at all (e.g. a session without the phone): the PC-served page when it can be.
+    $none = [string]::IsNullOrWhiteSpace($PreferredUrl)
+    if (-not $none -and (-not $u -or -not $u.IsAbsoluteUri)) { return [pscustomobject]@{ Url = $PreferredUrl; FallbackOrigin = $null } }
+    $what = if ($none) { 'no project helper page' } else { "$($u.Authority) not answering" }
+    if (-not $none -and (Test-QuestTcpOpen -HostName $u.Host -Port $u.Port)) {
         $script:QtHelperPage = [pscustomobject]@{ Url = $PreferredUrl; FallbackOrigin = $null }
     } elseif ($FallbackPort -gt 0 -and $PcAddress -and (Start-QuestHelperPageServer -Port $FallbackPort)) {
         $origin = "http://${PcAddress}:$FallbackPort"
         $script:QtHelperPage = [pscustomobject]@{ Url = "$origin/lsclean"; FallbackOrigin = $origin }
-        Write-QuestLog "Helper page: $($u.Authority) not answering - serving it from this PC at $origin/lsclean."
+        Write-QuestLog "Helper page: $what - serving it from this PC at $origin/lsclean."
     } else {
         $script:QtHelperPage = [pscustomobject]@{ Url = $PreferredUrl; FallbackOrigin = $null }
         $why = if (-not $PcAddress) { 'no route to the headset' } elseif ($FallbackPort -le 0) { 'none set' } else { "port $FallbackPort not served" }
-        Write-QuestLog "Helper page: $($u.Authority) not answering and no PC fallback ($why) - Recently closed items may stay."
+        Write-QuestLog "Helper page: $what and no PC fallback ($why) - Recently closed items may stay."
     }
     return $script:QtHelperPage
 }

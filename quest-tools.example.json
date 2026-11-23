@@ -1,0 +1,14 @@
+{
+  "adbExe": "",
+  "adbSerial": "",
+  "adbHost": "",
+  "adbPort": 5555,
+  "adbRediscoverSec": 60,
+  "controlPort": 18766,
+  "closeTabsOnExit": true,
+  "clearHistoryOnExit": true,
+  "clearHistoryFallback": "day",
+  "historyRetryMinutes": 120,
+  "wifiOffOnExit": true,
+  "ensureInsecureOriginFlag": true
+}
