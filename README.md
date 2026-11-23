@@ -64,7 +64,51 @@ Every cleanup runs [`Invoke-QuestBrowserCleanup`](lib/QuestCleanup.ps1), which a
 3. drops the cleaned origins from the list: only those with no tab still open on them (an open tab puts its page back in history, so it stays for the next cleanup);
 4. closes Quest Browser when only empty pages are left (`-CloseBrowser`).
 
-A failed delete can be handed over (`-OnHistoryFailed`, result `postponed`): Loop Segments' after-quit helper does it once the headset is worn. Entries not opened again for 30 days leave the list (newest 32 kept). Logged as `Tabs: closed N Quest Browser tab(s) on our pages` and `History step: cleared`.
+A failed delete can be handed over (`-OnHistoryFailed`, result `postponed`): Loop Segments' after-quit helper does it once the headset is worn (why a delete fails: [When Quest Browser does not answer](#when-quest-browser-does-not-answer)). Entries not opened again for 30 days leave the list (newest 32 kept). Logged as `Tabs: closed N Quest Browser tab(s) on our pages` and `History step: cleared`.
+
+What the caller supplies: its own origins, the helper page (`-HelperUrl`), the fallback range (`-FallbackRange`), the time limit (`-BudgetSec` / `-BudgetUntil`) and what to do with a failed delete. Loop Segments' side (its origins, the phone helper page and its PC fallback, the settings, the after-quit helper): its `windows\quest\README.md`, *Close LAN tabs on companion close* and *Delete Loop Segments history on companion close*.
+
+### When Quest Browser does not answer
+
+The tab closing works over DevTools on any awake headset: pages in open tabs answer, so DevTools can navigate them, run script in them and close them. The **history delete, its fallback and the *Recently closed* sweep** go through Quest Browser's own UI (its History panel and *Clear browsing data* dialog), and that UI often does not answer when nobody is wearing the headset:
+
+- **Idle.** With the proximity override on ([Proximity sensor](#proximity-sensor)), a headset lying still stays awake but goes **idle** after about a minute (`Device idle state`, [Headset state](#headset-state)). While it is idle the browser's UI **often** does not answer: no history list (`history query never answered`), no clear dialog (`dialog time options never arrived`), no new tabs from intents. Not always, and idle time alone does not decide it: one delete failed 35 min into idle, another worked 20 min into idle (`cleared` in 1.2 s, nobody wearing the headset), and new tabs from intents also opened on an idle headset. What differs is not known yet (the browser had been started fresh 15 min before the working one, and had run all afternoon before the failing one). So a cleanup at quit, with the headset on the desk, often fails; it is then handed over (`-OnHistoryFailed`) and done once the headset is worn.
+- **No open tab.** The History list and the dialog only answer while the browser has at least one tab (tested: the delete worked with one tab open and got `history query never answered` right after its last tab was closed; this made deletes fail even with the headset worn). So the tab closing always keeps one tab ([below](#closing-tabs-and-the-browser)).
+- **Asleep or off adb.** An asleep headset stays on Wi-Fi and adb only for a while; even before it drops off, the browser does not answer. Keep-awake holds the sensor off for that reason.
+
+(A `Page.navigate timeout` in the log usually means the page being opened does not answer, not that the headset is idle: navigating to a page that does not answer times out by itself.)
+
+### Closing tabs and the browser
+
+Every tab on our origins is closed over DevTools (`Close-QuestOurTabs`); other tabs stay. Empty tabs (`about:blank`, new-tab pages) are closed along with ours, and when no tab of yours is left **one tab is kept as a new-tab page** (back/forward list reset; `about:blank` only when the new-tab page cannot be loaded): `Tabs: kept one tab as a new-tab page`. That tab is what the History list needs. A force-stopped browser restores its open tabs, so it next starts on that New tab (a kept blank page used to come back as a blank tab), and that is also why our tabs are closed before the browser is.
+
+With `-CloseBrowser`, Quest Browser is **force-stopped** afterwards (`am force-stop com.oculus.browser`: Android's "close this app now", the only way to close an app over adb) whenever no tab of yours is left: empty new-tab pages and the kept tab do not count, whoever started the browser. Any tab of your own keeps it running: `Browser: N other tab(s) open - Quest Browser left running`. It waits 5 s first: Chromium writes its *Recently closed* list a few seconds after a change, and a force-stop before that can bring back an older copy on the next start. With a postponed delete the browser is left for whoever took the delete over (`helper`). Tested: cold start from a stopped browser, then a cleanup → history cleared, browser closed in 2.9 s.
+
+### History delete
+
+Deletes **only the entries on our origins** from Quest Browser history (`Clear-QuestBrowserHistory`). **The rest of your history is kept**, and so are cookies, cache, saved passwords, form data and site settings.
+
+How: the browser's own **History** list (the panel behind *History* in the browser menu) is opened over DevTools. Its own code asks the browser for the whole history, and each matching entry is removed the way that entry's remove button does it. Matching is by origin (scheme, host and port), so every entry on those origins goes, whatever its path. Only the origins given are matched: entries from an address no longer known (for example a PC address before DHCP gave it a new one) stay, unless the fallback runs.
+
+Then the history is read again. A delete is a message to the browser with no reply, so this re-read is the only proof that none are left. If some are left, it deletes those and checks again. That covers a delete the browser dropped, a very large history (older matches appear only once newer ones are gone), and a page still loading that adds a visit. Normally one pass and one check is all it takes (1-2 s in tests). It stops after 20 rounds or when the time limit is nearly used up; any matching entry left then means the selective delete failed. Logged as `History: deleted 2 entries on http://10.0.100.10:8765, http://10.0.100.244:18766; kept the other 2.`
+
+Quest Browser's 2D window is brought to the front first (the list only fills in then; launcher intent, sent again once if the first does not take), and the browser is started if it was closed. This also takes the headset out of an immersive WebXR session, which runs in a separate task and hides the 2D window. With the browser already running it takes 1-3 s; a cold start usually takes longer and may not fit a short time limit (logged).
+
+**Fallback range.** If the selective delete fails (History list not found, query not answered, entries left), `-FallbackRange` clears **all** Quest Browser history from that range instead, through the browser's own *Clear browsing data* dialog: **History only** is ticked, the range is picked, *Clear data* is pressed, then the dialog's previous ticks and range are put back. Cookies, cache, passwords, form data and site settings are never ticked. Ranges: `hour`, `day`, `week`, `fourweeks`, `all`; `''` = no fallback (the result is then `failed`). It deletes unrelated browsing in that range and misses our entries older than it, which is why it is only the fallback (the dialog only offers those fixed ranges). Logged `History: selective delete failed - ...`, then `History: fallback cleared ALL Quest Browser history from the last 24 hours (history only).`; result `fallback`. Like the list, the dialog only answers while a tab is open. Tested with one blank tab open: the last 24 hours cleared in 2 s, and *Recently closed* was emptied with it. 10 s of the time limit is kept for it.
+
+This relies on Quest Browser's internal UI (its History list component and the `webui_action_query_history` / `webui_action_delete_history` messages). A Quest Browser update can change those; the selective delete then fails (for example `History list not found`) and the fallback runs.
+
+### Recently closed
+
+The History panel also lists *Recently closed* tabs, and every tab closed over DevTools lands there: our tabs closed at cleanup, and helper tabs such as the `chrome://flags` fix's (shown as *Experiments*). These items also show as **tiles on the new-tab page**, and they are not in *See full history* or *Recently visited*. `chrome://` pages are never in history, and deleting a page from history does not reliably drop its item: an item for a test page whose history entry had been deleted, plus *Experiments* and empty *New tab* items cleaned before, were all back days later (probably a force-stop right after a change; see the 5 s wait above).
+
+So after the history delete, **the sweep** (`Invoke-QuestRecentlyClosedSweep`): every item whose tabs are all on our origins, new-tab pages, blank pages or `chrome://flags` is reopened, sent (via `about:blank`) to the **helper page** (`-HelperUrl`) with its back/forward list reset, and closed; one more history delete then removes the helper page's entries. Items with any other page in them are left alone. Logged `Recently closed: cleaned N of M ... item(s)`. What makes it work (all seen on the headset):
+
+1. the UI only holds the Recently closed list after asking the browser for it, and keeps the last answer, so the sweep requests it and waits 1.5 s before reading it (it used to see an empty or stale list and sweep nothing);
+2. the delete removes Recently closed items **by URL**, so that URL must be in history. The helper page has to be one whose visits are recorded: a small page with no login (Loop Segments: a 404 page, `/xr-assets/lsclean`); visits to a 1.4 MB script stopped being recorded, and a visit with a query string never was. A visit made in a reopened item is not recorded either;
+3. so after the sweep one visit to the helper page is made in the tab that stays open (the kept new-tab page, put back afterwards), and checked in the History list before the delete (retried once; logged `Recently closed: helper visit is / NOT in the History list`). The following delete removes that URL and every item pointing at it.
+
+The helper page must be reachable from the headset; its origin is always deleted with ours. Cleaned by hand once this way (6 items: 4 *New tab*, a test page, *Experiments*): the list stayed empty after a browser restart 20 s later.
 
 ## XR player engine
 
