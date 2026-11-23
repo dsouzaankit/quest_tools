@@ -363,4 +363,5 @@ try {
 
 if ($found) { Exit-Cycle 0 }
 Write-Host ('ERROR: headset not on adb on any of {0} saved network(s): wake it (put it on), check its Wi-Fi and wireless debugging.' -f (@($candidates).Count + [int][bool]$startProfile)) -ForegroundColor Red
+Write-Host '  After a reboot, wireless debugging comes back only through ADB Auto-Enable (its accessibility service must still be on): quest_tools\README.md, step 4.' -ForegroundColor Yellow
 Exit-Cycle 1
