@@ -9,9 +9,7 @@
 # first and reloads plain), closes the empty new-tab pages a cold start leaves, then reads
 # window.isSecureContext in the tab: when false (WebXR off), adds the page's origin to chrome://flags
 # "unsafely-treat-insecure-origin-as-secure" (Quest Browser restarts, closing its tabs) and opens the
-# page once more. -PrivateTab: a private tab instead (no immersive WebXR there).
-
-$script:QtIncognitoLauncher = 'com.oculus.browser/org.chromium.chrome.browser.incognito.IncognitoTabLauncher'
+# page once more. Always a normal tab: Quest Browser disables immersive WebXR in private tabs.
 
 # Wait for the headset to be on adb and awake (Get-QuestWakefulness 'Awake'), checking every
 # -PollSeconds: up to -WaitMinutes; with -WaitMinutes 0 and -ParentPid, until that process ends; with
@@ -69,91 +67,6 @@ function Wait-QuestHeadsetAwake {
         }
         Start-Sleep -Seconds ([Math]::Max(2, $PollSeconds))
     }
-}
-
-# Best effort: does a Quest Browser tab show -Url? (own DevTools forward, so it works outside a
-# session). -Mode Any: login in the URL ignored; Login: loaded through user:pass@ (login cached);
-# Plain: exactly -Url, no login in it. $true / $false after ~6 s / $null = could not check.
-function Test-QuestBrowserHasUrl {
-    param([string] $DeviceSerial, [string] $Url, [ValidateSet('Any', 'Login', 'Plain')] [string] $Mode = 'Any')
-    $f = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'forward', 'tcp:0', 'localabstract:chrome_devtools_remote')
-    $port = 0
-    if (-not [int]::TryParse(([string]$f.Out).Trim(), [ref]$port) -or $port -le 0) { return $null }
-    try {
-        $want = $Url.TrimEnd('/')
-        for ($i = 0; $i -lt 12; $i++) {
-            try {
-                # Invoke-RestMethod emits the JSON array as one object: enumerate it explicitly.
-                $tabs = @((Invoke-RestMethod -Uri "http://127.0.0.1:$port/json/list" -TimeoutSec 3 -NoProxy) | ForEach-Object { $_ })
-                foreach ($t in $tabs) {
-                    $rawUrl = ([string]$t.url).TrimEnd('/')
-                    $hasLogin = $rawUrl -match '^https?://[^/@]*@'
-                    $bare = $rawUrl -replace '^(https?://)[^/@]*@', '$1'
-                    if ($bare -ne $want) { continue }
-                    if ($Mode -eq 'Any' -or ($Mode -eq 'Login' -and $hasLogin) -or ($Mode -eq 'Plain' -and -not $hasLogin)) { return $true }
-                }
-            } catch {}
-            Start-Sleep -Milliseconds 500
-        }
-        return $false
-    } finally {
-        [void](Invoke-Adb -TimeoutSec 5 -Arguments @('-s', $DeviceSerial, 'forward', '--remove', "tcp:$port"))
-    }
-}
-
-# Ctrl+L (retried until the address bar has focus), type -TypedUrl, Enter. Never logs -TypedUrl.
-function Send-QuestOmniboxUrl {
-    param([string] $DeviceSerial, [string] $TypedUrl)
-    $omnibox = $false
-    for ($i = 0; $i -lt 8 -and -not $omnibox; $i++) {
-        # A fresh private tab ignores keys for a moment after launch.
-        Start-Sleep -Milliseconds 700
-        $k = Invoke-Adb -TimeoutSec 10 -Arguments @('-s', $DeviceSerial, 'shell', 'input', 'keycombination', 'KEYCODE_CTRL_LEFT', 'KEYCODE_L')
-        if ($k.Code -ne 0) { Write-QuestLog "Ctrl+L failed: $(Get-AdbMessage $k)"; return $false }
-        Start-Sleep -Milliseconds 500
-        $omnibox = Test-QuestImeShown -DeviceSerial $DeviceSerial
-    }
-    if (-not $omnibox) { Write-QuestLog 'Address bar never took focus - not typing the URL.'; return $false }
-    foreach ($step in @(, [string[]]@('input', 'text', ("'" + $TypedUrl + "'"))) + @(, [string[]]@('input', 'keyevent', 'KEYCODE_ENTER'))) {
-        $k = Invoke-Adb -TimeoutSec 10 -Arguments (@('-s', $DeviceSerial, 'shell') + $step)
-        if ($k.Code -ne 0 -or (Get-AdbMessage $k) -match '(?i)Error|Exception|Unknown') {
-            Write-QuestLog "'input $($step[1])' failed (code $($k.Code))."
-            return $false
-        }
-        Start-Sleep -Milliseconds 400
-    }
-    return $true
-}
-
-# A private tab (Chromium IncognitoTabLauncher + the URL typed into the address bar). With a login
-# URL: loaded once signed in (the private session caches the login), then again plain (a page whose
-# URL has user:pass@ cannot fetch() relative URLs).
-function Open-QuestIncognitoTab {
-    param([string] $DeviceSerial, [string] $Url, [string] $LoginUrl = '')
-    if (-not $LoginUrl) { $LoginUrl = $Url }
-    $r = Invoke-Adb -TimeoutSec 20 -Arguments @('-s', $DeviceSerial, 'shell', 'am', 'start', '-W', '-n', $script:QtIncognitoLauncher)
-    if (-not (Test-AdbStartOk $r)) { Write-QuestLog "Private-tab launcher failed (code $($r.Code)): $(Get-AdbMessage $r)"; return $false }
-    # Let the new private tab settle before keystrokes; only type into Quest Browser.
-    $resumed = $false
-    for ($i = 0; $i -lt 8 -and -not $resumed; $i++) { Start-Sleep -Milliseconds 500; $resumed = Test-QuestBrowserResumed -DeviceSerial $DeviceSerial }
-    if (-not $resumed) { Write-QuestLog 'Quest Browser not in front after private-tab launch - not typing the URL.'; return $false }
-    if (-not (Send-QuestOmniboxUrl -DeviceSerial $DeviceSerial -TypedUrl $LoginUrl)) { return $false }
-    if ($LoginUrl -ne $Url) {
-        if ((Test-QuestBrowserHasUrl -DeviceSerial $DeviceSerial -Url $Url -Mode Login) -eq $false) {
-            Write-QuestLog 'Signed-in load not seen in the tab list - reloading without the login anyway.'
-        }
-        Start-Sleep -Milliseconds 800
-        if (-not (Send-QuestOmniboxUrl -DeviceSerial $DeviceSerial -TypedUrl $Url)) {
-            Write-QuestLog 'Signed in, but could not reload without the login - page fetches will fail.'
-            return $true
-        }
-        $verified = Test-QuestBrowserHasUrl -DeviceSerial $DeviceSerial -Url $Url -Mode Plain
-    } else {
-        $verified = Test-QuestBrowserHasUrl -DeviceSerial $DeviceSerial -Url $Url -Mode Any
-    }
-    if ($verified -eq $false) { Write-QuestLog "Typed the URL into the private tab, but no browser tab shows $Url - check the headset." }
-    Write-QuestLog "Opened $Url in Quest browser, private tab ($DeviceSerial)"
-    return $true
 }
 
 # A normal tab, signed in when -LoginUrl differs (Open-QuestSignedInTab), reusing an open tab on
@@ -231,17 +144,12 @@ function Open-QuestPage {
         [string[]] $FlagOrigins = @(),
         [object] $HelperUrl = $null,
         [switch] $NoFlags,
-        [switch] $PrivateTab,
         [scriptblock] $BeforeOpen = $null
     )
     $Url = $Url -replace "'", ''
     $once = {
         # Before the open: a half-failed one can still leave a tab or a history entry behind.
         Register-QuestBrowserOrigin -Url $Url -Owner $Owner
-        if ($PrivateTab) {
-            if (Open-QuestIncognitoTab -DeviceSerial $DeviceSerial -Url $Url -LoginUrl $LoginUrl) { return $true }
-            Write-QuestLog 'Falling back to a normal tab.'
-        }
         return (Open-QuestNormalTab -DeviceSerial $DeviceSerial -Url $Url -LoginUrl $LoginUrl -ReuseOrigins $ReuseOrigins -BeforeOpen $BeforeOpen)
     }
     if (-not (& $once)) { return $false }

@@ -15,13 +15,13 @@
 #                        Get-QuestWakefulness, Test-QuestHeadsetWorn, Get-AdbMessage
 # lib\QuestDevice.ps1    proximity sensor (Invoke-Quest{Enable,Disable,Toggle}Proximity), keep-awake
 #                        (Invoke-QuestKeepAwakeSession), Invoke-QuestWifiOff, ConvertFrom-QuestProcNetAddress
-# lib\QuestBrowser.ps1   Quest Browser process / activity checks, Close-QuestBrowserIfEmpty, probe
+# lib\QuestBrowser.ps1   Quest Browser process / activity checks, Close-QuestBrowserIfEmpty
 # lib\QuestDevTools.ps1  Quest Browser over its DevTools socket: tabs, CDP, chrome://flags, history,
 #                        Recently closed
 # lib\QuestOrigins.ps1   shared list of origins opened in Quest Browser by any project
 #                        (Register-QuestBrowserOrigin, Get-QuestRegisteredOrigins): every cleanup uses it
 # lib\QuestOpen.ps1      Wait-QuestHeadsetAwake, Open-QuestPage (Push to Quest: registered, normal or
-#                        private tab, signed in, isSecureContext + insecure-origin flag fix)
+#                        signed in, isSecureContext + insecure-origin flag fix)
 # lib\QuestCleanup.ps1   Invoke-QuestBrowserCleanup: close our tabs, delete our history and Recently
 #                        closed items, close the browser when empty (Clear-QuestHistoryAndClosed)
 # lib\QuestHelperPage.ps1 the sweep's helper page: Resolve-QuestHelperUrl (a project's page, else one
