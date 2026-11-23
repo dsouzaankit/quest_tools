@@ -93,7 +93,12 @@ function Register-QuestControlTiles {
     $h = Get-QuestControlHost
     if ($h) { Write-QuestLog "Control page: $Owner tiles registered (host PID $($h.Pid), port $($h.Port))."; return [pscustomobject]@{ Port = $h.Port; Pid = $h.Pid; Started = $false } }
     $port = Get-QuestControlPort
-    $p = Start-QuestHiddenProcess -Pwsh (Get-QuestPwshExe) -Script $script:QuestControlHostScript -Arguments @('-Port', "$port")
+    # Shell-executed (Start-Process), not Start-QuestHiddenProcess: the host outlives the caller and
+    # must not inherit its handles. Inheriting a caller's redirected stdout kept that pipe open, so a
+    # caller reading it to the end (the Loop Segments companion's startup hook) waited forever.
+    $hostFile = [System.IO.Path]::GetFullPath($script:QuestControlHostScript) -replace '\\', '/'
+    $p = Start-Process -FilePath (Get-QuestPwshExe) -WindowStyle Hidden -PassThru `
+        -ArgumentList ('-NoProfile -NoLogo -NonInteractive -ExecutionPolicy Bypass -File "{0}" -Port {1}' -f $hostFile, $port)
     $t0 = [DateTime]::UtcNow
     while (([DateTime]::UtcNow - $t0).TotalSeconds -lt $WaitSec) {
         $h = Get-QuestControlHost
