@@ -18,6 +18,8 @@
 # lib\QuestBrowser.ps1   Quest Browser process / activity checks, Close-QuestBrowserIfEmpty, probe
 # lib\QuestDevTools.ps1  Quest Browser over its DevTools socket: tabs, CDP, chrome://flags, history,
 #                        Recently closed
+# lib\QuestOrigins.ps1   shared list of origins opened in Quest Browser by any project
+#                        (Register-QuestBrowserOrigin, Get-QuestRegisteredOrigins): every cleanup uses it
 # lib\QuestSkybox.ps1    SKYBOX VR Player: add / update / remove a WebDAV server in its database
 #
 # State shared across processes (keep these names: a running caller and a newer one must agree):
@@ -25,6 +27,7 @@
 #   %TEMP%\loopsegments-adb-rediscover.txt    last adb server restart for mDNS rediscovery
 #   %TEMP%\loopsegments-adb-stuck-reset.txt   last stuck-server reset
 #   %TEMP%\loopsegments-skybox-webdav.json    SKYBOX servers this PC added
+#   %TEMP%\quest-browser-origins.json         origins opened in Quest Browser (QuestOrigins.ps1)
 
 $script:QuestToolsRoot = $PSScriptRoot
 
@@ -38,7 +41,7 @@ if (-not (Get-Variable -Name AdbRediscoverSec -Scope Script -ErrorAction Silentl
 if (-not (Get-Variable -Name Adb -Scope Script -ErrorAction SilentlyContinue)) { $script:Adb = $null }
 $script:LastConnectMsg = ''
 
-foreach ($qtLib in 'QuestLog', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestSkybox') {
+foreach ($qtLib in 'QuestLog', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestSkybox') {
     . (Join-Path $PSScriptRoot "lib\$qtLib.ps1")
 }
 Remove-Variable -Name qtLib -ErrorAction SilentlyContinue
