@@ -14,7 +14,7 @@
 
   Runs Invoke-QuestHeadset.ps1 -WifiOff. While the headset is not on adb, keeps trying every 5 s for
   up to -WaitSec (default 120 s), restarting the adb server before each retry. Loop Segments'
-  windows\quest\Set-QuestWifiOff.ps1 runs this after moving the PC onto the phone's network.
+  windows\quest\Set-LoopSegmentsQuestWifiOff.ps1 runs this after moving the PC onto the phone's network.
 
   Exit codes: 0 Wi-Fi off, 1 headset not on adb, 2 no adb, 3 the headset did not take it.
   Log: %TEMP%\loopsegments-quest-lantab.log

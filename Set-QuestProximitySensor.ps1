@@ -17,10 +17,13 @@
   Runs Invoke-QuestHeadset.ps1 (-DisableProximity / -EnableProximity / -ToggleProximity). A running
   keep-awake session (-KeepAwakeSession) switches the sensor off again within ~20 s after you turn it on.
 
-  Headset not on adb (asleep, or Wi-Fi just switched on): keeps trying every 5 s for up to
-  -WaitSec (default 120 s), restarting the adb server before each retry.
+  Headset not on adb on the first try: runs Find-QuestWifiNetwork.ps1 once (this PC through its
+  saved Wi-Fi networks until the headset is on adb; the PC stays on that network, else goes back;
+  -NoNetworkCycle skips it). Then, still not on adb (asleep, or Wi-Fi just switched on): keeps trying
+  every 5 s for up to -WaitSec (default 120 s, counted from the end of the cycle), restarting the
+  adb server before each retry.
 
-  Loop Segments' windows\quest\Set-QuestProximitySensor.ps1 runs this after moving the PC onto the
+  Loop Segments' windows\quest\Set-LoopSegmentsQuestProximitySensor.ps1 runs this after moving the PC onto the
   phone's network.
 
   Exit codes: 0 done, 1 headset not on adb, 2 no adb, 3 the headset did not take the change.
@@ -38,7 +41,10 @@ param(
     # Exit straight away instead of waiting for Enter (for scripts).
     [switch] $NoWait,
     # Headset not on adb: keep trying for this many seconds (every 5 s). 0 = try once.
-    [int] $WaitSec = 120
+    [int] $WaitSec = 120,
+    # Do not try this PC's other saved Wi-Fi networks when the first try finds no headset (for
+    # callers that need the PC to stay on its network, e.g. Loop Segments on the phone's LAN).
+    [switch] $NoNetworkCycle
 )
 
 . (Join-Path $PSScriptRoot 'QuestWrapperCommon.ps1')
@@ -47,7 +53,7 @@ $switch = @{ On = '-EnableProximity'; Off = '-DisableProximity'; Toggle = '-Togg
 Write-Host "Quest proximity sensor: $($State.ToLowerInvariant())..." -ForegroundColor Cyan
 
 # The Quest script prints "[quest] Proximity: ... now 'CLOSE'" (or an error line).
-$r = Invoke-QuestWrapperScript -Script $script:QuestHeadsetScript -Arguments @($switch) -WaitSec $WaitSec
+$r = Invoke-QuestWrapperScript -Script $script:QuestHeadsetScript -Arguments @($switch) -WaitSec $WaitSec -CycleNetworks:(-not $NoNetworkCycle)
 if ($r.Code -eq 0) {
     $now = $null
     foreach ($l in $r.Out) { if ($l -match "now '(\w+)'") { $now = $Matches[1] } }

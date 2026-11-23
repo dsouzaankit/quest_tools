@@ -10,14 +10,31 @@ $script:QuestHeadsetScript = Join-Path $PSScriptRoot 'Invoke-QuestHeadset.ps1'
 # wireless debugging gets a new port, and a running adb server can go on missing it over mDNS: seen
 # nothing for minutes, listed 4 s after a restart; each try is a new process, so the script's own
 # 60 s restart never fires). Prints the script's lines; returns @{ Code; Out }.
+#
+# -CycleNetworks: when the first try finds no headset, run Find-QuestWifiNetwork.ps1 once (this PC
+# through its saved Wi-Fi networks until the headset is on adb; it stays there, else goes back), then
+# try again at once; -WaitSec counts from the end of the cycle. Runs before any retry, so its adb
+# server restarts never overlap this loop's. A headset on USB passes the first try and never cycles.
 function Invoke-QuestWrapperScript {
-    param([string] $Script, [string[]] $Arguments, [int] $WaitSec)
+    param([string] $Script, [string[]] $Arguments, [int] $WaitSec, [switch] $CycleNetworks)
+    $pwsh = (Get-Process -Id $PID).Path
     $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(0, $WaitSec))
     $tries = 0
+    $cycled = -not $CycleNetworks
     while ($true) {
         $tries++
-        $out = @(& (Get-Process -Id $PID).Path -NoProfile -NoLogo -ExecutionPolicy Bypass -File $Script @Arguments 2>&1 | ForEach-Object { "$_" })
+        $out = @(& $pwsh -NoProfile -NoLogo -ExecutionPolicy Bypass -File $Script @Arguments 2>&1 | ForEach-Object { "$_" })
         $code = $LASTEXITCODE
+        if ($code -eq 1 -and -not $cycled) {
+            $cycled = $true
+            Write-Host "  Headset not on adb on this network - trying this PC's saved Wi-Fi networks (Find-QuestWifiNetwork.ps1)..." -ForegroundColor Yellow
+            # Straight to this window (no capture): a cycle can take minutes, so show it as it goes.
+            & $pwsh -NoProfile -NoLogo -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Find-QuestWifiNetwork.ps1') -NoWait
+            $found = ($LASTEXITCODE -eq 0)
+            $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(0, $WaitSec))
+            # Found: the cycle left a fresh adb server with the headset on it - try again now.
+            if ($found) { continue }
+        }
         if ($code -ne 1 -or [DateTime]::UtcNow -ge $deadline) { break }
         if ($tries -eq 1) {
             Write-Host ("  Headset not on adb yet - trying every 5 s for up to {0} s (put it on / switch its Wi-Fi on; Ctrl+C to stop)..." -f $WaitSec) -ForegroundColor Yellow
