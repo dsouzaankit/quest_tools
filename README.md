@@ -3,7 +3,7 @@
 Generic PowerShell 7 helpers for a Meta Quest (tested on Quest 3) on **wireless adb**, split out of [ios_3d_loop_segments](../iOS%20apps/ios_3d_loop_segments) (`windows\quest\`, commit e865041). Used by:
 
 - **Loop Segments** (`ios_3d_loop_segments\windows\quest\`): the PC companion's Open on Quest, Quest control page, quit cleanup (`Watch-LoopSegmentsQuestLanTab.ps1` loads this repo);
-- **3d_playlist_local** (`individual_transcode\quest\`): the workflow's Quest session (through Loop Segments' scripts, plus `Find-QuestAdbExe` / `Invoke-Adb` / `Get-QuestWakefulness` directly).
+- **3d_playlist_local** (`individual_transcode\quest\`): the workflow's Quest session (through Loop Segments' scripts, plus `Find-QuestAdbExe` / `Invoke-Adb` / `Get-QuestWakefulness` / `Register-QuestBrowserOrigin` directly).
 
 It also holds the shared **Quest XR player engine** (`xr\`, A-Frame / WebXR JavaScript) that both projects' Quest Browser pages run: Loop Segments' `/xr` and 3d_playlist_local's PC XR page. See [XR player engine](#xr-player-engine).
 
@@ -23,6 +23,8 @@ Log: `%TEMP%\loopsegments-quest-lantab.log` (one log for all of them).
 | [`lib\QuestDevice.ps1`](lib/QuestDevice.ps1) | Proximity sensor (+ the "Proximity sensor OFF" notification), `Invoke-QuestKeepAwakeSession`, `Invoke-QuestWifiOff`, `ConvertFrom-QuestProcNetAddress` |
 | [`lib\QuestBrowser.ps1`](lib/QuestBrowser.ps1) | Quest Browser process / activity checks, `Close-QuestBrowserIfEmpty`, `Invoke-QuestIncognitoProbe` |
 | [`lib\QuestDevTools.ps1`](lib/QuestDevTools.ps1) | Quest Browser over its DevTools socket: tabs, CDP, `chrome://flags` (insecure-origin flag, Reset all), history delete, *Recently closed* sweep |
+| [`lib\QuestOrigins.ps1`](lib/QuestOrigins.ps1) | Shared list of the pages any project opened in Quest Browser: `Register-QuestBrowserOrigin`, `Get-QuestRegisteredOrigins`, `Remove-QuestClosedOrigins`. See [Quest Browser cleanup](#quest-browser-cleanup) |
+| [`lib\QuestCleanup.ps1`](lib/QuestCleanup.ps1) | `Invoke-QuestBrowserCleanup` (close our tabs, delete our history and *Recently closed* items, close the browser when empty), `Clear-QuestHistoryAndClosed` |
 | [`lib\QuestSkybox.ps1`](lib/QuestSkybox.ps1) | SKYBOX VR Player: add / update / remove a WebDAV server in its database |
 | [`xr\`](xr) | Quest XR player engine for Quest Browser pages: `xr-components.js` (A-Frame components), vendored `aframe.min.js` 1.6.0 + license, [`Sync-QuestXrEngine.ps1`](xr/Sync-QuestXrEngine.ps1). See [XR player engine](#xr-player-engine) |
 
@@ -46,9 +48,23 @@ Everything lands in your script scope: the helpers keep their state in $script:`
 | `loopsegments-adb-rediscover.txt` | Last adb server restart for mDNS rediscovery (at most every 5 min) |
 | `loopsegments-adb-stuck-reset.txt` | Last stuck-server reset (at most once a minute) |
 | `loopsegments-skybox-webdav.json` | SKYBOX servers this PC added |
+| `quest-browser-origins.json` | Pages opened in Quest Browser by any project (`origin`, `owner`), which every cleanup closes and deletes |
 | `loopsegments-quest-lantab.log` | The log |
 
-The names keep their `loopsegments-` prefix so a companion started before the split and a newer helper agree.
+The names keep their `loopsegments-` prefix so a companion started before the split and a newer helper agree (`quest-browser-origins.json` is newer and has none).
+
+## Quest Browser cleanup
+
+Every page a project opens on the headset is **registered when it opens**, with an owner name, in `%TEMP%\quest-browser-origins.json` ([`lib\QuestOrigins.ps1`](lib/QuestOrigins.ps1)): Loop Segments registers its phone LAN page (`loopsegments`) and the Quest control page (`loopsegments-control`), 3d_playlist_local its PC XR page (`3d_playlist_local-xr`). Origins are stored as `scheme://host:port` (no login, path or query).
+
+Every cleanup runs [`Invoke-QuestBrowserCleanup`](lib/QuestCleanup.ps1), which adds every registered origin to the ones the caller knows. So whichever quit runs first (the Loop Segments companion's, a 3d_playlist_local workflow's, End session, or the after-quit history helper) cleans up the pages of **all** projects, not only its own. In one DevTools session it:
+
+1. closes the tabs on those origins (`-CloseTabs`; one tab is always kept, as a new-tab page, because the History list needs an open tab);
+2. deletes their history entries (unless `-SkipHistory`), then sweeps their *Recently closed* items through `-HelperUrl` (a small page that lands in history; its origin is always deleted too) and deletes once more;
+3. drops the cleaned origins from the list: only those with no tab still open on them (an open tab puts its page back in history, so it stays for the next cleanup);
+4. closes Quest Browser when only empty pages are left (`-CloseBrowser`).
+
+A failed delete can be handed over (`-OnHistoryFailed`, result `postponed`): Loop Segments' after-quit helper does it once the headset is worn. Entries not opened again for 30 days leave the list (newest 32 kept). Logged as `Tabs: closed N Quest Browser tab(s) on our pages` and `History step: cleared`.
 
 ## XR player engine
 

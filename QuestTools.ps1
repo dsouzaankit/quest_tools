@@ -20,6 +20,8 @@
 #                        Recently closed
 # lib\QuestOrigins.ps1   shared list of origins opened in Quest Browser by any project
 #                        (Register-QuestBrowserOrigin, Get-QuestRegisteredOrigins): every cleanup uses it
+# lib\QuestCleanup.ps1   Invoke-QuestBrowserCleanup: close our tabs, delete our history and Recently
+#                        closed items, close the browser when empty (Clear-QuestHistoryAndClosed)
 # lib\QuestSkybox.ps1    SKYBOX VR Player: add / update / remove a WebDAV server in its database
 #
 # State shared across processes (keep these names: a running caller and a newer one must agree):
@@ -41,7 +43,7 @@ if (-not (Get-Variable -Name AdbRediscoverSec -Scope Script -ErrorAction Silentl
 if (-not (Get-Variable -Name Adb -Scope Script -ErrorAction SilentlyContinue)) { $script:Adb = $null }
 $script:LastConnectMsg = ''
 
-foreach ($qtLib in 'QuestLog', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestSkybox') {
+foreach ($qtLib in 'QuestLog', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestCleanup', 'QuestSkybox') {
     . (Join-Path $PSScriptRoot "lib\$qtLib.ps1")
 }
 Remove-Variable -Name qtLib -ErrorAction SilentlyContinue
