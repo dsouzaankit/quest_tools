@@ -65,7 +65,7 @@ function Clear-QuestHistoryAndClosed {
             Invoke-QuestHelperVisitInOpenTab -HelperUrl $HelperUrl
             $w0 = [DateTime]::UtcNow
             while (-not $recorded -and ([DateTime]::UtcNow - $w0).TotalSeconds -lt 8) {
-                Start-Sleep -Seconds 2
+                Start-Sleep -Milliseconds 500
                 $l = Clear-QuestBrowserHistory -DeviceSerial $DeviceSerial -Origins $Origins -BudgetSec 8 -FallbackRange '' -ListOnly
                 if ($l -and $l.PSObject.Properties['items']) { $recorded = @(@($l.items) | Where-Object { $_.ours -and ([string]$_.u) -eq $HelperUrl }).Count -gt 0 }
             }

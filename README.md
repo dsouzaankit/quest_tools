@@ -24,6 +24,8 @@ Log: `%TEMP%\loopsegments-quest-lantab.log` (one log for all of them).
 | [`lib\QuestBrowser.ps1`](lib/QuestBrowser.ps1) | Quest Browser process / activity checks, `Close-QuestBrowserIfEmpty`, `Invoke-QuestIncognitoProbe` |
 | [`lib\QuestDevTools.ps1`](lib/QuestDevTools.ps1) | Quest Browser over its DevTools socket: tabs, CDP, `chrome://flags` (insecure-origin flag, Reset all), history delete, *Recently closed* sweep |
 | [`lib\QuestOrigins.ps1`](lib/QuestOrigins.ps1) | Shared list of the pages any project opened in Quest Browser: `Register-QuestBrowserOrigin`, `Get-QuestRegisteredOrigins`, `Remove-QuestClosedOrigins`. See [Quest Browser cleanup](#quest-browser-cleanup) |
+| [`lib\QuestHelperPage.ps1`](lib/QuestHelperPage.ps1) | The *Recently closed* sweep's helper page: `Resolve-QuestHelperUrl` (a project's page, else one served from this PC), `Get-QuestPcAddress` |
+| [`lib\QuestHistoryRetry.ps1`](lib/QuestHistoryRetry.ps1), [`Invoke-QuestHistoryRetry.ps1`](Invoke-QuestHistoryRetry.ps1) | After-quit history helper: `Start-QuestHistoryRetry` hands a failed delete to a detached helper that does it once the headset is worn; `Stop-QuestHistoryRetry`, `Get-QuestHistoryRetryProcesses`. See [After-quit history helper](#after-quit-history-helper) |
 | [`lib\QuestCleanup.ps1`](lib/QuestCleanup.ps1) | `Invoke-QuestBrowserCleanup` (close our tabs, delete our history and *Recently closed* items, close the browser when empty), `Clear-QuestHistoryAndClosed` |
 | [`lib\QuestSkybox.ps1`](lib/QuestSkybox.ps1) | SKYBOX VR Player: add / update / remove a WebDAV server in its database |
 | [`xr\`](xr) | Quest XR player engine for Quest Browser pages: `xr-components.js` (A-Frame components), vendored `aframe.min.js` 1.6.0 + license, [`Sync-QuestXrEngine.ps1`](xr/Sync-QuestXrEngine.ps1). See [XR player engine](#xr-player-engine) |
@@ -48,6 +50,8 @@ Everything lands in your script scope: the helpers keep their state in $script:`
 | `loopsegments-adb-rediscover.txt` | Last adb server restart for mDNS rediscovery (at most every 5 min) |
 | `loopsegments-adb-stuck-reset.txt` | Last stuck-server reset (at most once a minute) |
 | `loopsegments-skybox-webdav.json` | SKYBOX servers this PC added |
+| `loopsegments-quest-history-pending.json` | The delete the after-quit helper waits to do (origins, options, hooks, helper PID, deadline) |
+| `loopsegments-quest-helper-page.ps1` | The PC-served helper page's server script (written on use) |
 | `quest-browser-origins.json` | Pages opened in Quest Browser by any project (`origin`, `owner`), which every cleanup closes and deletes |
 | `loopsegments-quest-lantab.log` | The log |
 
@@ -109,6 +113,30 @@ So after the history delete, **the sweep** (`Invoke-QuestRecentlyClosedSweep`): 
 3. so after the sweep one visit to the helper page is made in the tab that stays open (the kept new-tab page, put back afterwards), and checked in the History list before the delete (retried once; logged `Recently closed: helper visit is / NOT in the History list`). The following delete removes that URL and every item pointing at it.
 
 The helper page must be reachable from the headset; its origin is always deleted with ours. Cleaned by hand once this way (6 items: 4 *New tab*, a test page, *Experiments*): the list stayed empty after a browser restart 20 s later.
+
+**When the project's helper page does not answer** (for Loop Segments: the phone app closed, or the phone off the LAN), no visit is recorded and the swept items stay. [`Resolve-QuestHelperUrl`](lib/QuestHelperPage.ps1) `-PreferredUrl <page> -FallbackPort <port> -PcAddress <ip>` picks the page once per process: the preferred one when its host answers on TCP, else the same small 404 page served from this PC at `http://<pc>:<port>/lsclean` by a hidden pwsh that exits with the caller (or after 30 min; needs pwsh allowed through Windows Firewall on private networks). Its `FallbackOrigin` is then deleted with ours. Logged `Helper page: <host> not answering - serving it from this PC at ...`. On another Wi-Fi network the items stay until the next cleanup on the right one. `Get-QuestPcAddress -DeviceSerial <ip:port>` gives this PC's address on the route to the headset.
+
+### After-quit history helper
+
+A cleanup at quit usually runs with nobody wearing the headset, so the delete often fails ([When Quest Browser does not answer](#when-quest-browser-does-not-answer)), or the headset is not on adb at all. Instead of dropping the delete, the caller hands it over ([`lib\QuestHistoryRetry.ps1`](lib/QuestHistoryRetry.ps1)):
+
+```powershell
+Start-QuestHistoryRetry -Origins $o -Minutes 120 -CloseTabs -CloseBrowser -HelperUrl $page -HelperFallbackPort 18767 `
+    -FallbackRange day -WifiOff -StopIfCommandLine 'MyApp\.ps1' -AfterScript 'C:\...\After.ps1'   # $true = handed over
+```
+
+(`Invoke-QuestBrowserCleanup -OnHistoryFailed { param($o) Start-QuestHistoryRetry -Origins $o ... }` does it at the right moment.)
+
+- What is left goes to `%TEMP%\loopsegments-quest-history-pending.json`: the origins, whether to close tabs, reset the sensor (`-Proximity`: the quit could not reach the headset) and close the browser, the helper page, the fallback range, Wi-Fi off, the hooks, and how this process reached the headset (adb, serial, host, port). A second hand-off while one is waiting merges into it (origins added, the deadline moved).
+- One hidden helper starts, detached from the caller's process tree so it outlives it: [`Invoke-QuestHistoryRetry.ps1`](Invoke-QuestHistoryRetry.ps1). Logged `History: postponed - deleted when the headset is next worn (helper PID 6172, until 02:22)`; the cleanup's result is `postponed`.
+- Every **2 s** it looks for the headset on adb (`adb devices`, and `dumpsys vrpowermanager` once it is there). If the quit could not reach it, it turns the sensor back on as soon as it gets through. Once the headset is **worn** (`HEADSET_MOUNTED` and `Not idle`: [Headset state](#headset-state)) it **holds the proximity sensor off for the delete** (`prox_close`, only when the real sensor is on; turned back on right after, even if the delete failed), so you only need the headset on until Quest Browser comes up: taken off with the real sensor on, the headset sleeps and the browser stops answering. Logged `History retry: headset worn - deleting (sensor held off for it: the headset can come off now).` It then waits 1 s for the browser and runs `Invoke-QuestBrowserCleanup` for those origins plus the shared list (the browser comes to the front, so it pops up shortly after you put the headset on): `History retry: headset worn - deleting.` ... `History retry: done.` The fallback range is tried **once per helper run**: retried every few seconds, its *Clear browsing data* dialog kept popping up (seen stuck on *last 24 hours* while the browser did not answer); it also clears what you browsed since the quit. The browser is closed afterwards only once the delete worked.
+- After the delete it switches the headset's **Wi-Fi off** (`-WifiOff`). That happens while you are wearing it, so Wi-Fi goes off under you: switch it back on if you keep using the headset.
+- It gives up after `-Minutes` (Wi-Fi still switched off first if the headset is on adb): `History retry: the headset was not worn in time - gave up`.
+- `-StopIfCommandLine <regex>`: it stops, dropping the delete, when a process matching it starts after the helper (the project starting again: that session's quit deletes the same origins): `History retry: the session started again - stop`. `Stop-QuestHistoryRetry` stops every helper and drops the pending delete (a new session does it first thing, before its keep-awake can switch the sensor off under the helper).
+- `-AfterScript <path.ps1>`: run as `pwsh -File <path> -Outcome done|gaveup|stopped|none` when the helper ends (at most 11 min): for work that had to wait for the delete, such as a network change that would move the headset off this PC's network.
+- While it waits it restarts the PC's adb server at most every 20 min (not 5) when it cannot find the headset.
+
+Tested (with a 30 s check then): quit with the headset lying idle for 2 min → postponed; headset put on 4 min later → 3 entries deleted 6 s after the helper saw it worn. 2026-11-22 (5 s check, 3 s settle): XR page entry, Recently closed item and helper visit deleted 17 s after the helper saw the headset worn (delete 1 s, sweep 5 s, helper-visit check 6 s). Now the delete starts within ~2 s of putting the headset on, after a 1 s settle, and the helper-visit check polls every 0.5 s. If the helper is killed mid-delete (`Stop-QuestHistoryRetry` by a new session), the sensor stays held off: that session's keep-awake holds it off anyway and its quit turns it back on.
 
 ## XR player engine
 

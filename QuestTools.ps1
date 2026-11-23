@@ -22,6 +22,11 @@
 #                        (Register-QuestBrowserOrigin, Get-QuestRegisteredOrigins): every cleanup uses it
 # lib\QuestCleanup.ps1   Invoke-QuestBrowserCleanup: close our tabs, delete our history and Recently
 #                        closed items, close the browser when empty (Clear-QuestHistoryAndClosed)
+# lib\QuestHelperPage.ps1 the sweep's helper page: Resolve-QuestHelperUrl (a project's page, else one
+#                        served from this PC), Get-QuestPcAddress
+# lib\QuestHistoryRetry.ps1 after-quit history helper: Start-QuestHistoryRetry hands a failed delete
+#                        to Invoke-QuestHistoryRetry.ps1 (detached; deletes once the headset is worn),
+#                        Stop-QuestHistoryRetry, Get-QuestHistoryRetryProcesses
 # lib\QuestSkybox.ps1    SKYBOX VR Player: add / update / remove a WebDAV server in its database
 #
 # State shared across processes (keep these names: a running caller and a newer one must agree):
@@ -30,6 +35,7 @@
 #   %TEMP%\loopsegments-adb-stuck-reset.txt   last stuck-server reset
 #   %TEMP%\loopsegments-skybox-webdav.json    SKYBOX servers this PC added
 #   %TEMP%\quest-browser-origins.json         origins opened in Quest Browser (QuestOrigins.ps1)
+#   %TEMP%\loopsegments-quest-history-pending.json  the delete the after-quit helper waits to do
 
 $script:QuestToolsRoot = $PSScriptRoot
 
@@ -43,7 +49,7 @@ if (-not (Get-Variable -Name AdbRediscoverSec -Scope Script -ErrorAction Silentl
 if (-not (Get-Variable -Name Adb -Scope Script -ErrorAction SilentlyContinue)) { $script:Adb = $null }
 $script:LastConnectMsg = ''
 
-foreach ($qtLib in 'QuestLog', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestCleanup', 'QuestSkybox') {
+foreach ($qtLib in 'QuestLog', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestHelperPage', 'QuestCleanup', 'QuestHistoryRetry', 'QuestSkybox') {
     . (Join-Path $PSScriptRoot "lib\$qtLib.ps1")
 }
 Remove-Variable -Name qtLib -ErrorAction SilentlyContinue
