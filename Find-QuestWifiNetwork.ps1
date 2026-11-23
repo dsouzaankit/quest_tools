@@ -25,6 +25,10 @@
      Nothing found (or Ctrl+C): the PC goes back to the network it started on (-NoRestore keeps it
      on the last one tried).
 
+  Stuck adb server (`adb devices` does not answer in 10 s; seen: several adb.exe, every command hung):
+  reset at once (Repair-QuestAdbStuckServer: kill-server, else kill the adb.exe processes; at most
+  once a minute across scripts), and the time it took is added back to that network's look.
+
   Switching drops this PC's Wi-Fi for a few seconds per network, and each adb server restart drops
   every adb client on this PC (a running companion, a workflow) for a few seconds.
   -Profiles limits the cycle to those profiles (in that order); -SkipOutOfRange tries only networks
@@ -155,7 +159,8 @@ function Get-QuestAdbTransports {
         if (-not $isQuest) { continue }
         if ($isWifi) { $wifiList += $s } else { $usbList += $s }
     }
-    return [pscustomobject]@{ Wifi = $wifiList; Usb = $usbList }
+    # A healthy server answers `adb devices` in well under a second: a timeout means it is stuck.
+    return [pscustomobject]@{ Wifi = $wifiList; Usb = $usbList; TimedOut = ($r.Code -eq -1) }
 }
 
 # The headset's own serial (ro.serialno): the same over USB and Wi-Fi, so it ties the two entries
@@ -205,8 +210,25 @@ function Select-QuestWifiTransport {
 # The headset on adb over Wi-Fi (USB entries skipped) and answering; else $null. Connects like
 # Connect-Quest (-QuestHost, last known address, mDNS), but checks the Wi-Fi entries after each step
 # instead of stopping at a USB one.
+#
+# Stuck adb server (`adb devices` timed out; seen: two adb.exe, every command hung, kill-server too):
+# reset it at once with Repair-QuestAdbStuckServer, as Connect-Quest does (kill-server, else kill the
+# adb.exe on 127.0.0.1:5037 plus every adb.exe from our adb path; at most once a minute across all
+# scripts), then list again. Still stuck (or another script reset it under a minute ago): skip this
+# pass - connect / mDNS would only run into their own timeouts.
+$script:LookupRepaired = $false
 function Find-QuestOnWifi {
     $t = Get-QuestAdbTransports
+    if ($t.TimedOut) {
+        if (Repair-QuestAdbStuckServer) {
+            Write-Step '  adb: `adb devices` did not answer in 10 s - the adb server was stuck; reset it (see the log).' Yellow
+            $script:LookupRepaired = $true
+            $t = Get-QuestAdbTransports
+        } else {
+            Write-Step '  adb: `adb devices` did not answer in 10 s; the adb server was reset under a minute ago, not again yet.' Yellow
+        }
+        if ($t.TimedOut) { Write-Step '  adb: still not answering - trying again shortly.' Yellow; return $null }
+    }
     Update-QuestWanted -Transports $t
     $dev = Select-QuestWifiTransport -Transports $t
     $targets = @()
@@ -241,16 +263,21 @@ function Wait-QuestOnWifi {
     param([int] $Seconds)
     $until = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $Seconds))
     do {
+        $passStart = [DateTime]::UtcNow
+        $script:LookupRepaired = $false
         $dev = Find-QuestOnWifi
         if ($dev) { return $dev }
+        # A pass that hit a stuck server spent its time on timeouts and the reset, not on looking:
+        # give that time back, so a hang cannot use up this network's look.
+        if ($script:LookupRepaired) { $until = $until.Add([DateTime]::UtcNow - $passStart) }
         Start-Sleep -Seconds 2
     } while ([DateTime]::UtcNow -lt $until)
     return $null
 }
 
 function Reset-AdbForNewNetwork {
-    # Old transports point at the previous network; a fresh server listens to mDNS afresh.
-    [void](Invoke-Adb -Arguments @('disconnect') -TimeoutSec 5)
+    # A fresh server listens to mDNS afresh, and drops the old network's transports (no separate
+    # `adb disconnect`: against a stuck server it would only wait out its timeout).
     $how = Reset-QuestAdbServer -AdbExe $script:Adb -Log { param($m) Write-QuestLog "adb: $m" }
     if ($how -eq 'killed') { Write-Step '  adb: the adb server was stuck - killed it and started a fresh one.' Yellow }
 }
