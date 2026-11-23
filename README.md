@@ -23,6 +23,7 @@ Log: `%TEMP%\loopsegments-quest-lantab.log` (one log for all of them).
 | [`lib\QuestDevice.ps1`](lib/QuestDevice.ps1) | Proximity sensor (+ the "Proximity sensor OFF" notification), `Invoke-QuestKeepAwakeSession`, `Invoke-QuestWifiOff`, `ConvertFrom-QuestProcNetAddress` |
 | [`lib\QuestBrowser.ps1`](lib/QuestBrowser.ps1) | Quest Browser process / activity checks, `Close-QuestBrowserIfEmpty`, `Invoke-QuestIncognitoProbe` |
 | [`lib\QuestDevTools.ps1`](lib/QuestDevTools.ps1) | Quest Browser over its DevTools socket: tabs, CDP, `chrome://flags` (insecure-origin flag, Reset all), history delete, *Recently closed* sweep |
+| [`lib\QuestOpen.ps1`](lib/QuestOpen.ps1) | Push to Quest: `Wait-QuestHeadsetAwake`, `Open-QuestPage` (registered, one tab reused, signed in, empty tabs closed, `isSecureContext` + insecure-origin flag fix, private tab). See [Opening a page](#opening-a-page-push-to-quest) |
 | [`lib\QuestOrigins.ps1`](lib/QuestOrigins.ps1) | Shared list of the pages any project opened in Quest Browser: `Register-QuestBrowserOrigin`, `Get-QuestRegisteredOrigins`, `Remove-QuestClosedOrigins`. See [Quest Browser cleanup](#quest-browser-cleanup) |
 | [`lib\QuestHelperPage.ps1`](lib/QuestHelperPage.ps1) | The *Recently closed* sweep's helper page: `Resolve-QuestHelperUrl` (a project's page, else one served from this PC), `Get-QuestPcAddress` |
 | [`lib\QuestHistoryRetry.ps1`](lib/QuestHistoryRetry.ps1), [`Invoke-QuestHistoryRetry.ps1`](Invoke-QuestHistoryRetry.ps1) | After-quit history helper: `Start-QuestHistoryRetry` hands a failed delete to a detached helper that does it once the headset is worn; `Stop-QuestHistoryRetry`, `Get-QuestHistoryRetryProcesses`. See [After-quit history helper](#after-quit-history-helper) |
@@ -56,6 +57,27 @@ Everything lands in your script scope: the helpers keep their state in $script:`
 | `loopsegments-quest-lantab.log` | The log |
 
 The names keep their `loopsegments-` prefix so a companion started before the split and a newer helper agree (`quest-browser-origins.json` is newer and has none).
+
+## Opening a page (Push to Quest)
+
+[`lib\QuestOpen.ps1`](lib/QuestOpen.ps1): what Loop Segments' **Open on Quest** and 3d_playlist_local's XR page use.
+
+```powershell
+$w = Wait-QuestHeadsetAwake -WaitMinutes 7 -OnStatus { param($s) <# 'checking' / 'queued' #> }
+if ($w.Serial) { Open-QuestPage -DeviceSerial $w.Serial -Url $url -Owner 'myproject' -HelperUrl "$origin/xr-assets/lsclean" }
+```
+
+**Waiting for the headset.** `Wait-QuestHeadsetAwake` checks every `-PollSeconds` (5, at least 2) until the headset is on adb and `Awake`: for `-WaitMinutes`; with `-WaitMinutes 0 -ParentPid N`, until process N ends; with neither, once. While it is unreachable each check first tries to find it (`Connect-Quest`: last address, `-QuestHost`, mDNS, adb server restart); `-NoConnect` only reads `adb devices`, leaving that to another process such as a keep-awake job. `-Ready { ... }` also waits for the caller once the headset is awake (3d_playlist_local: the control page open finished). Logged `<label>headset Awake (10.0.100.238:41033)`, `<label>queued - opening when the headset is awake (...)`.
+
+**Opening.** `Open-QuestPage -Url`, in order:
+
+1. **registers** the page in the shared origin list under `-Owner`, before the open (a half-failed one can still leave a tab or a history entry), so every cleanup closes and deletes it ([Quest Browser cleanup](#quest-browser-cleanup));
+2. **one tab:** over DevTools, an open tab on the page's origin or `-ReuseOrigins` is brought to the front and reused; extra ones are closed. A reused tab must answer DevTools within 5 s: tabs Quest Browser restored after it was stopped (force-stop, or closed from the headset) can sit unloaded, or on a login prompt (the stop also drops a cached login), and are closed and opened fresh instead (`closed 1 open tab(s) ... that did not answer`). Otherwise a **VIEW intent** opens it (retried: the browser sometimes drops the first one) in a new normal tab, or by navigating the open new-tab page a cleanup left behind (that counts as success too; looking only for a new tab id used to miss it). `-BeforeOpen { param($DeviceSerial) }` runs first in the same DevTools session (Loop Segments: its control page in its own tab, so this page ends up in front). Without DevTools: a plain VIEW intent;
+3. **signed in** when `-LoginUrl` (the URL with `user:pass@`) differs: the tab is sent there (the browser caches the login), then back to the plain URL, and its back/forward list is reset so **Back** never leads to the URL with the password. A page whose URL contains `user:pass@` cannot `fetch()` (Chromium refuses URLs with credentials), hence the reload. A tab that ends on Chromium's error page (server down, firewall) counts as a failure;
+4. **empty new-tab pages are closed** (`Closed N empty new-tab page(s) ...`): a cold start can bring back extra Quest Browser windows, each on an empty new tab, because Android keeps their records across a force-stop (seen: two windows after a force-stop); a window left with no tab closes with it. Your own tabs are not touched;
+5. **secure context:** WebXR on an `http://` page needs `chrome://flags/#unsafely-treat-insecure-origin-as-secure` **Enabled** with the page's origin listed; only then is `window.isSecureContext` true (and `navigator.xr` there). So `isSecureContext` is read in the tab over DevTools (`Flags: <origin> isSecureContext=True in the open tab.`): **true = done**, with no `chrome://flags` visit (nothing extra in history or *Recently closed*; about 5 s instead of ~40 s). Only when it is **false** does it open `chrome://flags` on a helper tab (`-HelperUrl`: a small page with no login, closed afterwards; a scriptblock is only called then) and **add** the page's origin and `-FlagOrigins`, keeping the origins already there; then it enables the flag and **restarts Quest Browser** (flags apply only after a restart). **The restart closes the open tabs** (Quest does not restore them), so the page is opened once more and `isSecureContext` read again to confirm (tested: the whole open took 12 s with the restart). Nothing changes and nothing restarts when the flag already covers the origin. `-NoFlags` skips this step.
+
+**Private tab.** `-PrivateTab` opens a private tab instead (Chromium `IncognitoTabLauncher` + the URL typed into the address bar, signed in the same way; falls back to a normal tab). Not the default: **Quest Browser disables immersive WebXR in private tabs** (`isSessionSupported("immersive-vr")` is false there and true in a normal tab).
 
 ## Quest Browser cleanup
 
