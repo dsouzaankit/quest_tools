@@ -31,9 +31,29 @@ function Get-QuestTargets {
     # Invoke-RestMethod emits the JSON array as one object: enumerate it explicitly.
     try {
         return @((Invoke-RestMethod -Uri "http://127.0.0.1:$($script:QuestCdpPort)/json/list" -TimeoutSec 4 -NoProxy) | ForEach-Object { $_ })
-    } catch {
-        return @()
+    } catch {}
+    # Another process may have restarted the adb server (its "adb looks stuck" reset), which drops
+    # every forward, ours too: every list then came back empty, so New-QuestViewTab sent the VIEW
+    # intent 3 times and left 3 tabs that were never signed in, each on the login prompt. Forward again once.
+    if ($script:QuestCdpSerial -and (Test-QuestDevToolsForwardLost)) {
+        $serial = $script:QuestCdpSerial
+        $script:QuestCdpPort = 0
+        if (Open-QuestDevTools -DeviceSerial $serial) {
+            Write-QuestLog "DevTools: forward was gone (adb server restarted?) - forwarded again on port $($script:QuestCdpPort)."
+            try {
+                return @((Invoke-RestMethod -Uri "http://127.0.0.1:$($script:QuestCdpPort)/json/list" -TimeoutSec 4 -NoProxy) | ForEach-Object { $_ })
+            } catch {}
+        }
     }
+    return @()
+}
+
+# True when adb no longer lists our DevTools forward.
+function Test-QuestDevToolsForwardLost {
+    if ($script:QuestCdpPort -le 0) { return $true }
+    $r = Invoke-Adb -TimeoutSec 10 -Arguments @('forward', '--list')
+    if ($r.Code -ne 0) { return $false }
+    return -not ([string]$r.Out -match ("(?m)^\S+\s+tcp:$($script:QuestCdpPort)\s"))
 }
 
 function Get-QuestTabs { @(Get-QuestTargets | Where-Object { $_.type -eq 'page' -and ([string]$_.url) -notlike 'chrome://panel-app-nav/' }) }
