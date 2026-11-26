@@ -263,6 +263,16 @@ no controllers:
   nothing counts for 1.5 s after entering. Measured on a Quest 3 (2026-11-26): fist 0.85-1.07, relaxed or
   open hand 1.5-2.0; a pinch with the other fingers curled (pinching Enter AR) scored 1.31, which the first
   limit (1.35) took for a fist and left AR a second after entering.
+- **both fists held 1 s** = switch these hand gestures off / on (`window.__xrHandGesturesOff`). The ring
+  fills cyan, then flashes red (off) or green (on); after a toggle nothing counts until both hands open.
+  While off, hand pinches are dropped before the pages' `select` handlers (the engine wraps
+  `XRSession.addEventListener` for `select*`) and a fist does not exit; controllers work as before.
+  Quest's own hand tracking (pointing, the system gesture) stays on: a web page cannot turn it off.
+  Logged as `hand-gestures {off}`.
+- **Every immersive session asks for `hand-tracking`**, Quest Browser's own Enter VR included: the engine
+  wraps `navigator.xr.requestSession` / `offerSession` from `<head>`. A-Frame offers a VR session while
+  the scene starts, before a component can add the feature, and offers again only after a VR session,
+  not after AR; so VR entered after AR got no hands until this (2026-11-26).
 - **No hands at all** (only controllers, even in Quest Home) with hand tracking on in Settings: the
   headset's hand tracking service can be stuck (`adb shell dumpsys
   oculus.internal.tracking.IHandTrackingService/default` shows `Left/Right Hand Enabled: no`); a restart
