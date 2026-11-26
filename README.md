@@ -25,7 +25,7 @@ Log: `%TEMP%\loopsegments-quest-lantab.log` (one log for all of them).
 | [`lib\QuestLog.ps1`](lib/QuestLog.ps1) | `Write-QuestLog` |
 | [`lib\QuestAdbServer.ps1`](lib/QuestAdbServer.ps1) | `Reset-QuestAdbServer` (also a stuck server), `Start-QuestAdbServerDetached` |
 | [`lib\QuestAdb.ps1`](lib/QuestAdb.ps1) | `Find-QuestAdbExe`, `Invoke-Adb`, `Get-OnlineQuestSerial`, `Connect-Quest` (+ last address, mDNS, rediscover), `Repair-QuestAdbStuckServer`, `Get-QuestWakefulness`, `Test-QuestHeadsetWorn` |
-| [`lib\QuestDevice.ps1`](lib/QuestDevice.ps1) | Proximity sensor (+ the "Proximity sensor OFF" notification), `Invoke-QuestKeepAwakeSession`, `Invoke-QuestWifiOff`, `ConvertFrom-QuestProcNetAddress` |
+| [`lib\QuestDevice.ps1`](lib/QuestDevice.ps1) | Proximity sensor (+ the "Proximity sensor OFF" notification), `Invoke-QuestKeepAwakeSession` (`-OnTick { ... }`: the caller's own work on each ~20 s check, headset on adb or not, errors logged once and never fatal; Loop Segments renews the phone's Keep Alive there while the XR page plays), `Invoke-QuestWifiOff`, `ConvertFrom-QuestProcNetAddress` |
 | [`lib\QuestBrowser.ps1`](lib/QuestBrowser.ps1) | Quest Browser process / activity checks, `Close-QuestBrowserIfEmpty` |
 | [`lib\QuestDevTools.ps1`](lib/QuestDevTools.ps1) | Quest Browser over its DevTools socket: tabs, CDP, `chrome://flags` (insecure-origin flag, Reset all), history delete, *Recently closed* sweep |
 | [`lib\QuestOpen.ps1`](lib/QuestOpen.ps1) | Push to Quest: `Wait-QuestHeadsetAwake`, `Open-QuestPage` (registered, one tab reused, signed in, empty tabs closed, `isSecureContext` + insecure-origin flag fix). See [Opening a page](#opening-a-page-push-to-quest) |
@@ -233,10 +233,23 @@ Tested (with a 30 s check then): quit with the headset lying idle for 2 min → 
 
 `xr\` is the one editable copy of the WebXR player engine both projects' Quest pages run: 180° SBS domes
 (VR180 half sphere, equidistant fisheye 180, or a flat screen: `window.__xrProjection`), chroma key over
-passthrough, per-eye WebGL layers (left dome layer 1, right dome layer 2) in **Enter VR and Enter AR**
+passthrough (key colour pure black `#000000` = a brightness key instead: near-black pixels go transparent, for
+black fisheye backgrounds), per-eye WebGL layers (left dome layer 1, right dome layer 2) in **Enter VR and Enter AR**
 (SBS off = one picture to both eyes), the AV1 render-target path (MP4 `av01` and Matroska
 `V_AV1`), and the `xr_debug.json` log ring. Each page keeps its own `xr-app.js` / `xr-player.html` (playlists,
 server URLs) and sets those `window.__xr*` knobs.
+
+**Hand tracking** (`xr-hand-gestures`, put on `<a-scene>` by the engine itself; `window.__xrHandGestures = false`
+turns it off): the engine requests the optional `hand-tracking` WebXR feature, so in Enter VR / Enter AR with
+no controllers:
+
+- **pinch** (thumb + index) = play / pause. Quest sends a hand pinch as the session `select` event, which both
+  pages already map to play / pause, as with the controller trigger.
+- **fist held 1 s** (either hand; `window.__xrHandExitHoldMs`) = leave VR / AR back to Quest Browser's 2D
+  window. A ring in front of the eyes fills while the fist is held; opening the hand cancels. Logged as
+  `hand-exit`.
+- **another Quest app**: a web page cannot open one, but Quest's own system gesture (look at your palm, pinch)
+  opens the universal menu inside WebXR too.
 
 - **3d_playlist_local** (`individual_transcode\xr\serve_xr_page.py`): serves `/xr-assets/xr-components.js`,
   `aframe.min.js` straight from this folder (found like the rest of this repo).
