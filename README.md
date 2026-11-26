@@ -258,7 +258,15 @@ no controllers:
   pages already map to play / pause, as with the controller trigger.
 - **fist held 1 s** (either hand; `window.__xrHandExitHoldMs`) = leave VR / AR back to Quest Browser's 2D
   window. A ring in front of the eyes fills while the fist is held; opening the hand cancels. Logged as
-  `hand-exit`.
+  `hand-exit`. A fist is every fingertip within 1.15 hand-sizes (wrist to middle knuckle) of the wrist
+  (`window.__xrHandFistRatio`), thumb and index tips at least 15 mm apart (so a pinch never counts), and
+  nothing counts for 1.5 s after entering. Measured on a Quest 3 (2026-11-26): fist 0.85-1.07, relaxed or
+  open hand 1.5-2.0; a pinch with the other fingers curled (pinching Enter AR) scored 1.31, which the first
+  limit (1.35) took for a fist and left AR a second after entering.
+- **No hands at all** (only controllers, even in Quest Home) with hand tracking on in Settings: the
+  headset's hand tracking service can be stuck (`adb shell dumpsys
+  oculus.internal.tracking.IHandTrackingService/default` shows `Left/Right Hand Enabled: no`); a restart
+  fixed it.
 - **another Quest app**: a web page cannot open one, but Quest's own system gesture (look at your palm, pinch)
   opens the universal menu inside WebXR too.
 
