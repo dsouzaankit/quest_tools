@@ -118,11 +118,14 @@ function Invoke-QuestEnableProximity {
 # is not CLOSE, send `prox_close` (acts as worn, does not sleep, stays on adb). A headset in standby
 # is left alone (prox_close would wake it). -RestoreProximity: turn the sensor back on once -ParentPid
 # exits, unless another keep-awake without -RestoreProximity (a companion session) still runs.
+# -OnTick: the caller's own per-poll work (~20 s, headset on adb or not); its errors are logged once
+# per distinct message and never stop the loop.
 function Invoke-QuestKeepAwakeSession {
-    param([int] $ParentPid, [switch] $RestoreProximity)
+    param([int] $ParentPid, [switch] $RestoreProximity, [scriptblock] $OnTick)
     if ($ParentPid -le 0) { Write-QuestLog 'Keep-awake: -ParentPid is required.'; return 2 }
     Write-QuestLog "Keep-awake: holding the Quest proximity sensor off while PID $ParentPid runs."
     $lastNote = ''
+    $lastTickError = ''
     while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
         $note = ''
         try {
@@ -151,6 +154,12 @@ function Invoke-QuestKeepAwakeSession {
             $note = "error: $($_.Exception.Message)"
         }
         if ($note -ne $lastNote) { Write-QuestLog "Keep-awake: $note"; $lastNote = $note }
+        if ($OnTick) {
+            try { & $OnTick; $lastTickError = '' } catch {
+                $e = $_.Exception.Message
+                if ($e -ne $lastTickError) { Write-QuestLog "Keep-awake: tick error: $e"; $lastTickError = $e }
+            }
+        }
         for ($i = 0; $i -lt 20 -and (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Seconds 1 }
     }
     if ($RestoreProximity) {

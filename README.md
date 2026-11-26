@@ -25,7 +25,7 @@ Log: `%TEMP%\loopsegments-quest-lantab.log` (one log for all of them).
 | [`lib\QuestLog.ps1`](lib/QuestLog.ps1) | `Write-QuestLog` |
 | [`lib\QuestAdbServer.ps1`](lib/QuestAdbServer.ps1) | `Reset-QuestAdbServer` (also a stuck server), `Start-QuestAdbServerDetached` |
 | [`lib\QuestAdb.ps1`](lib/QuestAdb.ps1) | `Find-QuestAdbExe`, `Invoke-Adb`, `Get-OnlineQuestSerial`, `Connect-Quest` (+ last address, mDNS, rediscover), `Repair-QuestAdbStuckServer`, `Get-QuestWakefulness`, `Test-QuestHeadsetWorn` |
-| [`lib\QuestDevice.ps1`](lib/QuestDevice.ps1) | Proximity sensor (+ the "Proximity sensor OFF" notification), `Invoke-QuestKeepAwakeSession` (`-OnTick { ... }`: the caller's own work on each ~20 s check, headset on adb or not, errors logged once and never fatal; Loop Segments renews the phone's Keep Alive there while the XR page plays), `Invoke-QuestWifiOff`, `ConvertFrom-QuestProcNetAddress` |
+| [`lib\QuestDevice.ps1`](lib/QuestDevice.ps1) | Proximity sensor (+ the "Proximity sensor OFF" notification), `Invoke-QuestKeepAwakeSession` (`-OnTick { ... }`: the caller's own work on each ~20 s check, headset on adb or not, errors logged once and never fatal; Loop Segments renews the phone's Keep Alive there while [Quest media activity](#quest-media-activity) is fresh), `Invoke-QuestWifiOff`, `ConvertFrom-QuestProcNetAddress` |
 | [`lib\QuestBrowser.ps1`](lib/QuestBrowser.ps1) | Quest Browser process / activity checks, `Close-QuestBrowserIfEmpty` |
 | [`lib\QuestDevTools.ps1`](lib/QuestDevTools.ps1) | Quest Browser over its DevTools socket: tabs, CDP, `chrome://flags` (insecure-origin flag, Reset all), history delete, *Recently closed* sweep |
 | [`lib\QuestOpen.ps1`](lib/QuestOpen.ps1) | Push to Quest: `Wait-QuestHeadsetAwake`, `Open-QuestPage` (registered, one tab reused, signed in, empty tabs closed, `isSecureContext` + insecure-origin flag fix). See [Opening a page](#opening-a-page-push-to-quest) |
@@ -38,6 +38,7 @@ Log: `%TEMP%\loopsegments-quest-lantab.log` (one log for all of them).
 | [`lib\QuestSettings.ps1`](lib/QuestSettings.ps1) | `Get-QuestToolsSettings`, `Initialize-QuestToolsFromSettings`, `Get-QuestHistoryFallbackRange`. See [Settings](#settings) |
 | [`lib\QuestControl.ps1`](lib/QuestControl.ps1) | The control page from a script: `Register-QuestControlTiles`, `Unregister-QuestControlTiles`, `Open-QuestControlPage`, `Get-QuestControlPcLink`, `Get-QuestControlToken`, `Get-QuestControlHost` |
 | [`lib\QuestSession.ps1`](lib/QuestSession.ps1) | `Invoke-QuestSessionCleanup`: the end-of-session cleanup |
+| [`lib\QuestMediaActivity.ps1`](lib/QuestMediaActivity.ps1) | "One of our pages is playing": `Set-QuestMediaActivity`, `Get-QuestMediaActivity -FreshSec N`, `Get-QuestMediaActivityPath`. See [Quest media activity](#quest-media-activity) |
 | [`xr\`](xr) | Quest XR player engine for Quest Browser pages: `xr-components.js` (A-Frame components), vendored `aframe.min.js` 1.6.0 + license, [`Sync-QuestXrEngine.ps1`](xr/Sync-QuestXrEngine.ps1). See [XR player engine](#xr-player-engine) |
 
 ## Using it from a script
@@ -129,6 +130,16 @@ One request at a time, handled only once a connection has sent one (Quest Browse
 ## End-of-session cleanup
 
 `Invoke-QuestHeadset.ps1 -Cleanup` (`Invoke-QuestSessionCleanup`, [`lib\QuestSession.ps1`](lib/QuestSession.ps1)), for a project's quit: tabs on our pages closed and their history (+ *Recently closed*) deleted within ~28 s ([Quest Browser cleanup](#quest-browser-cleanup)), Quest Browser closed when only empty pages are left, the proximity sensor back on, the **Wi-Fi off** last. "Our pages" are every origin in the shared origin list (each project registers what it opens, the control page included) plus `-ExtraOrigins a,b`. The *Recently closed* helper page is `-HelperUrl`, else the one served from this PC on `controlPort + 1`. Not on adb, or Quest Browser not answering (nobody wearing it): the delete goes to the [after-quit helper](#after-quit-history-helper), which switches the Wi-Fi off after it (`-StopIfCommandLine <regex>` stops that helper when a matching process starts). Choices not given follow the [settings](#settings) (`-CloseTabs` / `-KeepTabs`, `-SkipHistory`, `-WifiOff` / `-KeepWifi`, `-KeepProximity`). Exit 0 done, 1 not on adb (handed to the helper), 3 incomplete, 4 history postponed; logs `Cleanup: finished ...`.
+
+## Quest media activity
+
+Which of our pages is **playing on the Quest right now**, for any project to ask ([`lib\QuestMediaActivity.ps1`](lib/QuestMediaActivity.ps1)). A project's page server records each media request its page makes (a `<video>` fetching a segment) in its own file, `%TEMP%\quest-media-activity-<owner>.json`. One file per owner, so writers never race. Only requests to our own servers write these files, so other Quest Browser playback (YouTube, any site) does not count. adb cannot tell them apart: `dumpsys audio` reports playback per app (`com.oculus.browser`), with no URL or tab.
+
+- **Format** (UTF-8 JSON; write `<file>.tmp`, then rename over the file): `{"owner": "playlist", "lastMediaEpoch": 1764134400.5, "lastMediaUtc": "...", "media": "hybrid/3d_op_00_Full_SBS.mkv", "pid": 1234}`. Readers use `lastMediaEpoch` (Unix seconds, UTC). Write at most every ~15 s.
+- **Write:** `Set-QuestMediaActivity -Owner <name> [-Media <what>]` from PowerShell; other languages write the format themselves. 3d_playlist_local's `xr\serve_xr_page.py` (owner `playlist`) does, on each `/media` GET.
+- **Read:** `Get-QuestMediaActivity [-FreshSec N]` returns `{Owner, AgeSec, Media, Path}` per owner, newest first; with `-FreshSec`, only those within the last N seconds (a clock up to 60 s ahead also counts).
+- **Used by:** Loop Segments' keep-awake. While anything played in the last 3 min, it renews the phone's Keep Alive every 10 min, from an `Invoke-QuestKeepAwakeSession -OnTick` step. The phone call itself stays in Loop Segments: it is that app's endpoint and login.
+- Paused or closed pages stop writing, so a reader sees the activity go stale within its `-FreshSec`. The files are not cleaned up; a stale one is just old.
 
 ## Settings
 

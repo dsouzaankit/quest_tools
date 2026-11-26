@@ -37,6 +37,7 @@
 # lib\QuestControl.ps1   the shared Quest control page (QuestControlHost.ps1): Register-QuestControlTiles,
 #                        Open-QuestControlPage, Get-QuestControlPcLink, Get-QuestControlToken
 # lib\QuestSession.ps1   end-of-session cleanup: Invoke-QuestSessionCleanup (tabs, history, sensor, Wi-Fi)
+# lib\QuestMediaActivity.ps1 "our page is playing": Set-/Get-QuestMediaActivity (one file per owner)
 #
 # State shared across processes (keep these names: a running caller and a newer one must agree):
 #   %TEMP%\loopsegments-quest-last-adb.txt    last ip:port the headset was on adb at
@@ -45,6 +46,7 @@
 #   %TEMP%\loopsegments-skybox-webdav.json    SKYBOX servers this PC added
 #   %TEMP%\quest-browser-origins.json         origins opened in Quest Browser (QuestOrigins.ps1)
 #   %TEMP%\loopsegments-quest-history-pending.json  the delete the after-quit helper waits to do
+#   %TEMP%\quest-media-activity-<owner>.json  last media request a project's page made (QuestMediaActivity.ps1)
 
 $script:QuestToolsRoot = $PSScriptRoot
 
@@ -58,7 +60,7 @@ if (-not (Get-Variable -Name AdbRediscoverSec -Scope Script -ErrorAction Silentl
 if (-not (Get-Variable -Name Adb -Scope Script -ErrorAction SilentlyContinue)) { $script:Adb = $null }
 $script:LastConnectMsg = ''
 
-foreach ($qtLib in 'QuestLog', 'QuestSettings', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestPc', 'QuestOpen', 'QuestHelperPage', 'QuestCleanup', 'QuestHistoryRetry', 'QuestSkybox', 'QuestControl', 'QuestSession') {
+foreach ($qtLib in 'QuestLog', 'QuestSettings', 'QuestAdbServer', 'QuestAdb', 'QuestDevice', 'QuestBrowser', 'QuestDevTools', 'QuestOrigins', 'QuestPc', 'QuestOpen', 'QuestHelperPage', 'QuestCleanup', 'QuestHistoryRetry', 'QuestSkybox', 'QuestControl', 'QuestSession', 'QuestMediaActivity') {
     . (Join-Path $PSScriptRoot "lib\$qtLib.ps1")
 }
 Remove-Variable -Name qtLib -ErrorAction SilentlyContinue
