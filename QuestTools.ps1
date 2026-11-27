@@ -48,8 +48,6 @@
 #   %TEMP%\loopsegments-quest-history-pending.json  the delete the after-quit helper waits to do
 #   %TEMP%\quest-media-activity-<owner>.json  last media request a project's page made (QuestMediaActivity.ps1)
 
-$script:QuestToolsRoot = $PSScriptRoot
-
 # Defaults (Initialize-QuestTools overrides them).
 $script:QtAdbExe = ''
 $script:QtSerial = ''

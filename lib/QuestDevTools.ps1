@@ -456,21 +456,6 @@ function Close-QuestHelperTab {
     Close-QuestTab -Id $Tab.id
 }
 
-# Close a tab as a blank page: navigate to about:blank, drop its back/forward entries, close it.
-# Used where no Recently closed item should be left behind (see Invoke-QuestRecentlyClosedSweep).
-function Close-QuestTabAsBlank {
-    param($Tab)
-    try {
-        if (([string]$Tab.url) -ne 'about:blank') {
-            [void](Invoke-QuestCdp -Tab $Tab -Method 'Page.navigate' -Params @{ url = 'about:blank' } -TimeoutSec 8)
-            $b = Wait-QuestTabUrl -Id $Tab.id -TimeoutSec 6 -Match { param($u) $u -eq 'about:blank' }
-            if ($b) { $Tab = $b }
-        }
-        [void](Invoke-QuestCdp -Tab $Tab -Method 'Page.resetNavigationHistory' -TimeoutSec 5)
-    } catch {}
-    Close-QuestTab -Id $Tab.id
-}
-
 # Recently closed items that are only ours: every tab in them is on one of -Origins, a new-tab page,
 # a blank page or chrome://flags. They also show as tiles on the new-tab page, and deleting their pages from
 # history does not reliably drop them (seen: items for a deleted page and for chrome:// pages
